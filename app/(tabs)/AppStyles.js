@@ -1,4 +1,3 @@
-// AppStyles.js
 import { StyleSheet, Dimensions } from 'react-native';
 
 const { width } = Dimensions.get('window');
@@ -63,13 +62,13 @@ const AppStyles = StyleSheet.create({
     backgroundColor: colors.lightGray100, // Overall background
     // Conditional styling for desktop
     ...(IS_DESKTOP && {
-      flexDirection: 'row', // For side-by-side layout
+      flexDirection: 'row', // For side-by-side layout (e.g., list on left, detail on right)
     }),
   },
   screen: {
     flex: 1, // Make screen fill available space
     backgroundColor: colors.white, // Default screen background to white
-    // Conditional styling for desktop
+    // Conditional styling for desktop for the main screen container
     ...(IS_DESKTOP && {
       borderRightWidth: 1,
       borderRightColor: colors.lightGray200,
@@ -110,8 +109,8 @@ const AppStyles = StyleSheet.create({
     height: 2.5 * 16,
     // Conditional styling for desktop
     ...(IS_DESKTOP && {
-      width: 'auto',
-      flexGrow: 1,
+      width: 'auto', // Adjust width for desktop if used as a spacer
+      flexGrow: 1, // Allow it to grow to fill space
     }),
   },
   contentPadding: {
@@ -121,6 +120,35 @@ const AppStyles = StyleSheet.create({
     ...(IS_DESKTOP && {
       padding: 2 * 16,
     }),
+  },
+  screenContentWrapper: {
+    paddingBottom: 2 * 16, // Added padding for scrollable content below fixed header
+  },
+  // Detail Header (specific to property details)
+  detailHeader: {
+    paddingTop: 1 * 16,
+    paddingBottom: 0.5 * 16,
+  },
+  detailName: {
+    fontSize: 1.5 * 16,
+    fontWeight: '700',
+    color: colors.lightGray700,
+    marginBottom: 0.25 * 16,
+  },
+  detailLocation: {
+    fontSize: 1 * 16,
+    color: colors.lightGray600,
+    marginBottom: 0.25 * 16,
+  },
+  detailStatus: {
+    fontSize: 1 * 16,
+    fontWeight: '500',
+    color: colors.lightGray600,
+    marginBottom: 0.25 * 16,
+  },
+  detailType: {
+    fontSize: 0.875 * 16,
+    color: colors.lightGray500,
   },
   cardList: {
     flexDirection: 'column',
@@ -146,317 +174,268 @@ const AppStyles = StyleSheet.create({
     fontWeight: '600',
     color: colors.lightGray900,
     marginBottom: 0.25 * 16,
+    fontSize: 1.125 * 16, // Example size, adjust as needed
   },
-  cardSubtitle: {
-    color: colors.lightGray500,
+  cardLocation: {
     fontSize: 0.875 * 16,
+    color: colors.lightGray500,
   },
+  cardStatus: {
+    fontSize: 0.875 * 16,
+    color: colors.lightGray600,
+    marginTop: 0.25 * 16,
+  },
+  // Buttons
   btnPrimary: {
     backgroundColor: colors.blue600,
+    paddingVertical: 0.75 * 16,
+    paddingHorizontal: 1.25 * 16,
     borderRadius: 0.5 * 16,
-    paddingVertical: 0.5 * 16,
-    paddingHorizontal: 1 * 16,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   btnPrimaryText: {
     color: colors.white,
-    fontSize: 0.875 * 16,
-    fontWeight: '500',
-    textAlign: 'center',
+    fontSize: 1 * 16,
+    fontWeight: '600',
+  },
+  btnPrimaryModal: {
+    minWidth: 6.25 * 16, // Ensure buttons in modal have a minimum width
+  },
+  btnSecondary: {
+    backgroundColor: colors.lightGray100, // Lighter background
+    paddingVertical: 0.75 * 16,
+    paddingHorizontal: 1.25 * 16,
+    borderRadius: 0.5 * 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.lightGray300,
+  },
+  btnSecondaryText: {
+    color: colors.lightGray700,
+    fontSize: 1 * 16,
+    fontWeight: '600',
   },
   btnFull: {
     width: '100%',
-    paddingVertical: 1 * 16,
-    paddingHorizontal: 1.5 * 16,
-    borderRadius: 0.75 * 16,
-  },
-  btnPurple: {
-    backgroundColor: colors.purple600,
-  },
-  btnPurpleDisabled: {
-    backgroundColor: '#c084fc', // A lighter purple for disabled state
   },
   btnFlexCenter: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 0.5 * 16,
+    gap: 0.5 * 16, // Space between icon and text
   },
+  btnPurple: {
+    backgroundColor: colors.purple600,
+  },
+  btnPurpleDisabled: {
+    opacity: 0.6,
+  },
+  // Floating Action Button
   fab: {
     position: 'absolute',
-    bottom: 1.5 * 16,
-    right: 1.5 * 16,
+    bottom: 1.25 * 16,
+    right: 1.25 * 16,
+    backgroundColor: colors.blue600,
     width: 3.5 * 16,
     height: 3.5 * 16,
-    backgroundColor: colors.purple600, // Changed FAB to purple to match the image
-    borderRadius: 9999,
+    borderRadius: 1.75 * 16,
     alignItems: 'center',
     justifyContent: 'center',
-    ...shadows.lg,
+    ...shadows.md,
   },
-  detailHeader: {
-    marginTop: 0.5 * 16,
+  // Empty State
+  emptyState: {
+    padding: 1.25 * 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.white,
+    borderRadius: 0.75 * 16,
+    marginTop: 1 * 16,
+    borderWidth: 1,
+    borderColor: colors.lightGray200,
+    borderStyle: 'dashed',
   },
-  detailName: {
-    fontSize: 1.25 * 16,
-    fontWeight: '700',
-    color: colors.lightGray900,
+  emptyStateText: {
+    fontSize: 1.125 * 16,
+    fontWeight: '600',
+    color: colors.lightGray600,
+    textAlign: 'center',
+    marginBottom: 0.5 * 16,
   },
-  detailLocation: {
+  emptyStateSubtext: {
+    fontSize: 0.875 * 16,
     color: colors.lightGray500,
+    textAlign: 'center',
   },
+  // Info Boxes (from old details page, repurposed for existing properties)
   infoBox: {
-    backgroundColor: colors.lightGray50, // Lighter background for info box
+    backgroundColor: colors.white,
     borderRadius: 0.75 * 16,
     padding: 1 * 16,
-    marginBottom: 1.5 * 16,
+    marginBottom: 1 * 16,
+    ...shadows.sm,
   },
   infoGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 1 * 16,
+    justifyContent: 'space-between',
   },
   infoGridItem: {
-    width: '48%',
+    width: '48%', // Approx half minus spacing
+    marginBottom: 0.75 * 16,
   },
   infoItemLabel: {
     fontSize: 0.875 * 16,
     color: colors.lightGray500,
+    marginBottom: 0.25 * 16,
   },
   infoItemValue: {
+    fontSize: 1 * 16,
     fontWeight: '500',
-    color: colors.lightGray900,
+    color: colors.lightGray700,
   },
-  stickyHeader: {
-    position: 'absolute',
-    top: 0,
-    zIndex: 10,
-    width: '100%',
+  // AI Description Section
+  aiSection: {
+    marginBottom: 1 * 16,
   },
+  aiDescriptionBox: {
+    backgroundColor: colors.lightGray50, // Very light background
+    borderRadius: 0.75 * 16,
+    padding: 1 * 16,
+    marginBottom: 1 * 16,
+    borderWidth: 1,
+    borderColor: colors.lightGray200,
+  },
+  spinnerContainer: {
+    paddingVertical: 1.25 * 16,
+    alignItems: 'center',
+  },
+  // Property List (on PropertiesScreen)
   propertyList: {
-    flexDirection: 'column',
-    gap: 0.5 * 16,
+    // Container for displaying existing properties
   },
   propertyItem: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 1 * 16,
+    alignItems: 'center',
     backgroundColor: colors.white,
+    borderRadius: 0.75 * 16,
+    paddingVertical: 0.75 * 16,
+    paddingHorizontal: 1 * 16,
+    marginBottom: 0.5 * 16,
     borderWidth: 1,
     borderColor: colors.lightGray200,
-    borderRadius: 0.5 * 16,
   },
   propertyItemMain: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 1 * 16,
+    flex: 1,
+    marginRight: 0.625 * 16,
   },
   propertyName: {
+    fontSize: 1 * 16,
     fontWeight: '500',
-    color: colors.lightGray900,
+    color: colors.lightGray700,
+    marginLeft: 0.5 * 16,
   },
   propertyValue: {
+    fontSize: 1 * 16,
     color: colors.lightGray600,
+    fontWeight: 'bold',
   },
-  emptyState: {
-    textAlign: 'center',
-    paddingVertical: 2.5 * 16,
-    paddingHorizontal: 1 * 16,
-    backgroundColor: colors.white,
-    borderRadius: 0.5 * 16,
+  // Add Property Screen Specific
+  newPropertyItemWrapper: {
+    marginBottom: 1.5 * 16,
     borderWidth: 1,
     borderColor: colors.lightGray200,
-  },
-  emptyStateText: {
-    color: colors.lightGray500,
-    textAlign: 'center',
-  },
-  emptyStateSubtext: {
-    fontSize: 0.875 * 16,
-    color: colors.lightGray400,
-    marginTop: 0.25 * 16,
-    textAlign: 'center',
-  },
-  modalBackdrop: {
-    flex: 1, // Occupy full screen
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderRadius: 0.75 * 16,
     padding: 1 * 16,
   },
-  modalContent: {
-    backgroundColor: colors.white,
-    borderRadius: 1 * 16,
-    padding: 1.5 * 16,
-    width: '90%', // Adjust width for smaller screens
-    maxWidth: 24 * 16,
-    ...shadows.lg, // Add shadow to modal
+  newPropertyRemoveButton: {
+    padding: 0.25 * 16,
   },
-  modalTitle: {
-    fontSize: 1.25 * 16,
-    fontWeight: '700',
-    color: colors.lightGray900,
-    marginBottom: 1.5 * 16,
+  formRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 1 * 16, // Margin for the entire row of inputs
   },
-  formGroup: {
+  formGroupHalf: { // For form groups that are half width in a row
+    flex: 1,
+    // No vertical margin here, it's handled by the parent formRow
+  },
+  formGroup: { // For full-width form groups
     marginBottom: 1 * 16,
   },
   formLabel: {
     fontSize: 0.875 * 16,
+    color: colors.lightGray600,
+    marginBottom: 0.375 * 16,
     fontWeight: '500',
-    color: colors.lightGray700,
-    marginBottom: 0.5 * 16,
   },
   formInput: {
-    width: '100%',
-    paddingVertical: 0.75 * 16,
+    borderWidth: 1,
+    borderColor: colors.lightGray300,
+    borderRadius: 0.5 * 16,
+    paddingVertical: 0.625 * 16,
     paddingHorizontal: 0.75 * 16,
-    borderWidth: 1,
-    borderColor: colors.lightGray300,
-    borderRadius: 0.5 * 16,
-    color: colors.lightGray900,
-    backgroundColor: colors.white, // Ensure input background is white
-  },
-  formSelect: {
-    width: '100%',
-    // In React Native, Picker styling is a bit different. You style the container
-    // and potentially the individual items if the component supports it.
-    // The main style here applies to the Picker container.
-    height: 3.5 * 16, // Standard height for input fields
-    borderWidth: 1,
-    borderColor: colors.lightGray300,
-    borderRadius: 0.5 * 16,
-    backgroundColor: colors.white,
-  },
-  modalActions: {
-    flexDirection: 'row',
-    gap: 0.75 * 16,
-    marginTop: 1.5 * 16,
-  },
-  btnSecondary: {
-    flex: 1,
-    paddingVertical: 0.75 * 16,
-    paddingHorizontal: 1 * 16,
-    borderWidth: 1,
-    borderColor: colors.lightGray300,
-    borderRadius: 0.5 * 16,
-    backgroundColor: colors.white,
-  },
-  btnSecondaryText: {
+    fontSize: 1 * 16,
     color: colors.lightGray700,
-    textAlign: 'center',
-  },
-  btnPrimaryModal: {
-    flex: 1,
-  },
-  pageContainer: {
-    flexDirection: 'column',
-    minHeight: '100%',
-    backgroundColor: colors.lightGray50,
-  },
-  pageContent: {
-    flexGrow: 1,
-    paddingVertical: 1.5 * 16,
-    paddingHorizontal: 1 * 16,
-  },
-  pageFooter: {
     backgroundColor: colors.white,
-    padding: 1 * 16,
-    borderTopWidth: 1,
-    borderTopColor: colors.lightGray200,
-    marginTop: 'auto',
   },
+  // Icon Grid (from old AddPropertyScreen, kept styles for completeness if needed)
   iconGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 0.75 * 16,
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start', // Start icons from left
+    marginTop: 0.5 * 16,
+    gap: 0.5 * 16, // Space between icons
   },
   iconWrapper: {
-    width: (width - (1 * 16 * 2) - (0.75 * 16 * 5)) / 6, // Calculate width for 6 columns approx
-    aspectRatio: 1, // Keep it square
+    width: 2.5 * 16,
+    height: 2.5 * 16,
+    borderRadius: 1.25 * 16, // Circular
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 0.75 * 16,
-    borderRadius: 0.5 * 16,
-  },
-  iconWrapperSelected: {
-    backgroundColor: '#dbeafe', // light blue
-    borderWidth: 2,
-    borderColor: colors.blue600,
+    marginBottom: 0.625 * 16, // Only vertical margin needed now with gap
   },
   iconWrapperNotSelected: {
-    backgroundColor: colors.lightGray100, // Light gray for not selected
+    backgroundColor: colors.lightGray100,
+    borderWidth: 1,
+    borderColor: colors.lightGray300,
+  },
+  iconWrapperSelected: {
+    backgroundColor: colors.blue100, // Light blue
     borderWidth: 2,
-    borderColor: 'transparent',
+    borderColor: colors.blue600, // Blue border
   },
-  aiSection: {
-    marginTop: 1.5 * 16,
-  },
-  aiDescriptionBox: {
-    backgroundColor: colors.lightGray50,
-    borderRadius: 0.75 * 16,
-    padding: 1 * 16,
-    marginTop: 1.5 * 16,
-  },
-  spinner: {
-    borderRadius: 9999,
-    width: 2 * 16,
-    height: 2 * 16,
-    borderTopWidth: 2,
-    borderTopColor: colors.purple600,
-    borderRightWidth: 2,
-    borderRightColor: 'transparent',
-  },
-  spinnerContainer: {
-    flexDirection: 'row',
+  // Modal Styles
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'center',
-    padding: 1 * 16,
+    alignItems: 'center',
   },
-  propertyDetailRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 0.75 * 16,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.lightGray100,
+  modalContent: {
+    backgroundColor: colors.white,
+    borderRadius: 0.75 * 16,
+    padding: 1.5 * 16,
+    width: '80%', // Adjust as needed
+    maxWidth: 25 * 16, // Max width for modal on larger screens
+    ...shadows.lg,
   },
-  propertyDetailLabel: {
+  modalTitle: {
+    fontSize: 1.25 * 16,
     fontWeight: '600',
     color: colors.lightGray700,
+    marginBottom: 1.25 * 16,
+    textAlign: 'center',
   },
-  propertyDetailValue: {
-    color: colors.lightGray900,
-  },
-  // Desktop specific styles
-  twoPanelLayout: {
+  modalActions: {
     flexDirection: 'row',
-    flex: 1, // Make it fill the available space
-    backgroundColor: colors.lightGray100,
-  },
-  objectsScreenDesktop: {
-    maxWidth: 22 * 16,
-    flexShrink: 0,
-    borderRightWidth: 1,
-    borderRightColor: colors.lightGray200,
-    ...shadows.sm,
-  },
-  mainContentPanel: {
-    flexGrow: 1,
-    backgroundColor: colors.white,
-    flexDirection: 'column',
-    ...shadows.sm,
-  },
-  screenContentWrapper: {
-    flexGrow: 1,
-  },
-  selectedCard: {
-    backgroundColor: '#dbeafe', // var(--blue-50)
-    borderColor: colors.blue600,
-    borderWidth: 1,
-    ...shadows.md,
-  },
-  fabHiddenDesktop: {
-    display: 'none',
+    justifyContent: 'space-around',
+    marginTop: 1.25 * 16,
   },
 });
 

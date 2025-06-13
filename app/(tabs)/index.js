@@ -1,139 +1,164 @@
-import React, { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import {
-  View,
-  Text,
-  TouchableOpacity,
-  TextInput,
+  ActivityIndicator,
+  Alert,
+  Dimensions,
   Modal,
   ScrollView,
-  Dimensions,
-  ActivityIndicator,
-  // Add Alert for better error messages
-  Alert 
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View
 } from 'react-native';
-// You NEED to install this: npm install @react-native-picker/picker
-import { Picker } from '@react-native-picker/picker'; 
-// You NEED to install this: npm install lucide-react-native
-import { Plus, ChevronLeft, Home, Settings, Paintbrush, Ruler, Wrench, Tag, Box, KeyRound, FileText, Palette, Sparkles } from 'lucide-react-native';
+import { Picker } from '@react-native-picker/picker';
+import { Box, ChevronLeft, FileText, KeyRound, Paintbrush, Palette, Plus, Ruler, Tag, Wrench, X } from 'lucide-react-native'; // Removed Sparkles
 
-// Import your new styles
-import AppStyles, { colors, IS_DESKTOP } from './AppStyles';
+import AppStyles, { colors } from './AppStyles';
 
-// Map icon names to Lucide components
-const IconMap = { Palette, Ruler, Box, Wrench, Tag, KeyRound, FileText, Paintbrush, Sparkles };
+// Removed Sparkles from IconMap as it's no longer used
+const IconMap = { Palette, Ruler, Box, Wrench, Tag, KeyRound, FileText, Paintbrush };
+
+// Helper to find an item by path (e.g., [1, 101] finds item with id 101 inside item with id 1)
+const findItemByPath = (data, path) => {
+  let currentItems = data;
+  let foundItem = null;
+
+  for (let i = 0; i < path.length; i++) {
+    const idToFind = path[i];
+    const item = currentItems.find(item => item.id === idToFind);
+
+    if (!item) {
+      foundItem = null;
+      break;
+    }
+
+    foundItem = item;
+    currentItems = item.children || []; // Move to children for next iteration
+  }
+  return foundItem;
+};
+
+// Helper to update an item by path (e.g., add a child)
+const updateItemByPath = (data, path, updateFn) => {
+  if (path.length === 0) { // Updating root level
+    const updatedData = updateFn(data);
+    return updatedData;
+  }
+
+  const newData = [...data];
+  let currentLevel = newData;
+
+  for (let i = 0; i < path.length; i++) {
+    const idToFind = path[i];
+    const itemIndex = currentLevel.findIndex(item => item.id === idToFind);
+
+    if (itemIndex === -1) break; // Should not happen if path is valid
+
+    if (i === path.length - 1) { // Found the target item
+      currentLevel[itemIndex] = {
+        ...currentLevel[itemIndex],
+        ...updateFn(currentLevel[itemIndex]) // Apply the update function
+      };
+    } else {
+      // Create a new array for children to maintain immutability
+      currentLevel[itemIndex] = {
+        ...currentLevel[itemIndex],
+        children: [...(currentLevel[itemIndex].children || [])]
+      };
+      currentLevel = currentLevel[itemIndex].children;
+    }
+  }
+  return newData;
+};
+
 
 const App = () => {
   const [currentScreen, setCurrentScreen] = useState('objects');
-  const [selectedProperty, setSelectedProperty] = useState(null);
+  const [selectedProperty, setSelectedProperty] = useState(null); // This now refers to the ID of the item whose *details/properties* are being viewed
   const [showAddObjectModal, setShowAddObjectModal] = useState(false);
-  const [generatedDescription, setGeneratedDescription] = useState('');
-  const [isGenerating, setIsGenerating] = useState(false);
 
-  const [isLargeScreen, setIsLargeScreen] = useState(Dimensions.get('window').width >= 768);
+  // New state for hierarchical navigation
+  const [currentPath, setCurrentPath] = useState([]); // e.g., [], [1], [1, 101]
 
-  useEffect(() => {
-    const updateLayout = () => {
-      setIsLargeScreen(Dimensions.get('window').width >= 768);
-    };
-    const dimensionListener = Dimensions.addEventListener('change', updateLayout);
-    return () => {
-      dimensionListener.remove(); // Correctly remove the event listener
-    };
-  }, []);
+  // Removed isLargeScreen state and its useEffect as we are unifying the UI
 
-  const [properties, setProperties] = useState([
-    { id: 1, name: 'Kerkstraat 45', location: 'Amsterdam • 1017 GC', status: 'Verhuurd' },
-    { id: 2, name: 'Prinsengracht 123', location: 'Amsterdam • 1015 DZ', status: 'Leegstaand' },
-    { id: 3, name: 'Vondelpark 78', location: 'Amsterdam • 1071 AA', status: 'Verhuurd' }
-  ]);
-
-  const [propertyDetails, setPropertyDetails] = useState({
-    1: {
+  const [objectsHierarchy, setObjectsHierarchy] = useState([
+    {
+      id: 1,
       name: 'Kerkstraat 45',
       location: 'Amsterdam • 1017 GC',
+      status: 'Verhuurd',
+      type: 'object',
       details: { 'Woz': 'Bruto', 'Grootte': '30 m2', 'Materiaal': 'Hout' },
       properties: [
         { name: 'Object', value: 'Test', icon: 'Box' },
         { name: 'Grootte', value: '20x20cm', icon: 'Ruler' },
-        { name: 'Kleur', value: 'Groen', icon: 'Palette' },
+        { name: 'Kleur', value: 'Groen', value: 'Groen', icon: 'Palette' },
         { name: 'Materiaal', value: 'Hout', icon: 'Wrench' }
+      ],
+      children: [
+        { id: 101, name: 'Verdieping 1', location: '1e etage', status: 'Verhuurd', type: 'floor', details: { 'Woz': 'N.v.t.', 'Grootte': '15 m2', 'Materiaal': 'Beton' }, children: [
+            { id: 1011, name: 'Kamer 1', location: 'Links voor', status: 'Leegstaand', type: 'room', details: { 'Woz': 'N.v.t.', 'Grootte': '8 m2', 'Materiaal': 'Hout' }, children: [] },
+            { id: 1012, name: 'Kamer 2', location: 'Rechts achter', status: 'Verhuurd', type: 'room', details: { 'Woz': 'N.v.t.', 'Grootte': '7 m2', 'Materiaal': 'Hout' }, children: [] }
+          ]
+        },
+        { id: 102, name: 'Verdieping 2', location: '2e etage', status: 'Leegstaand', type: 'floor', details: { 'Woz': 'N.v.t.', 'Grootte': '15 m2', 'Materiaal': 'Beton' }, children: [] },
+        { id: 103, name: 'Zolder', location: 'Bovenste etage', status: 'In onderhoud', type: 'attic', details: { 'Woz': 'N.v.t.', 'Grootte': '10 m2', 'Materiaal': 'Hout' }, children: [] }
       ]
     },
-    2: {
+    {
+      id: 2,
       name: 'Prinsengracht 123',
       location: 'Amsterdam • 1015 DZ',
+      status: 'Leegstaand',
+      type: 'object',
       details: { 'Woz': 'Netto', 'Grootte': '120 m2', 'Materiaal': 'Steen' },
-      properties: []
+      properties: [],
+      children: []
     },
-    3: {
+    {
+      id: 3,
       name: 'Vondelpark 78',
       location: 'Amsterdam • 1071 AA',
+      status: 'Verhuurd',
+      type: 'object',
       details: { 'Woz': 'Bruto', 'Grootte': '85 m2', 'Materiaal': 'Beton' },
-      properties: []
+      properties: [],
+      children: []
     }
-  });
-
-  // --- GEMINI API FUNCTION ---
-  const generatePropertyDescription = async (property) => {
-    setIsGenerating(true);
-    setGeneratedDescription('');
-
-    let prompt = `Genereer een korte, aantrekkelijke verkoopbeschrijving voor het volgende pand in het Nederlands:\n\nNaam: ${property.name}\nLocatie: ${property.location}\nDetails:\n${Object.entries(property.details).map(([k, v]) => `- ${k}: ${v}`).join('\n')}\nOverige eigenschappen:\n${property.properties.map(p => `- ${p.name}: ${p.value}`).join('\n')}\n\nHoud de beschrijving professioneel, beknopt en focus op de belangrijkste verkoopargumenten.`;
-
-    try {
-      const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
-      // YOUR GEMINI API KEY HERE. DO NOT HARDCODE IN PRODUCTION APPS.
-      const apiKey = "";
-      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-
-      const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(`API request failed with status ${response.status}: ${JSON.stringify(errorData)}`);
-      }
-
-      const result = await response.json();
-      const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
-      setGeneratedDescription(text || "Kon geen beschrijving genereren. Probeer het opnieuw.");
-
-    } catch (error) {
-      console.error("Error generating description:", error);
-      Alert.alert("Fout", "Fout bij het genereren van de beschrijving. Controleer de console voor details.");
-      setGeneratedDescription("Fout bij het genereren van de beschrijving.");
-    } finally {
-      setIsGenerating(false);
-    }
-  };
+  ]);
 
   // --- UTILITY FUNCTIONS ---
-  const handleAddProperty = (propertyId, newProperty) => {
-    setPropertyDetails(prev => ({
-      ...prev,
-      [propertyId]: {
-        ...prev[propertyId],
-        properties: [...prev[propertyId].properties, newProperty]
-      }
-    }));
-    setCurrentScreen('properties'); // Go back to properties list after adding
+  // Modified to accept an array of new properties
+  const handleAddProperty = (targetPath, newPropertiesArray) => {
+    setObjectsHierarchy(prev => updateItemByPath(prev, targetPath, (item) => ({
+      ...item,
+      properties: [...(item.properties || []), ...newPropertiesArray]
+    })));
+    // setCurrentScreen('properties'); // Navigated after save
   };
 
-  const handleAddObject = (newObject) => {
-    const newId = (properties.length > 0 ? Math.max(...properties.map(p => p.id)) : 0) + 1;
-    setProperties(prev => [...prev, { id: newId, ...newObject }]);
-    setPropertyDetails(prev => ({
-      ...prev,
-      [newId]: {
+  const handleAddObject = (parentPath, newObject) => {
+    setObjectsHierarchy(prev => updateItemByPath(prev, parentPath, (parentItem) => {
+      const currentChildren = parentItem ? (parentItem.children || []) : prev;
+      const newId = (currentChildren.length > 0 ? Math.max(...currentChildren.map(p => p.id)) : 0) + 1;
+      const newItem = {
+        id: newId,
         name: newObject.name,
-        location: newObject.location,
-        details: { 'Woz': '-', 'Grootte': '-', 'Materiaal': '-' },
-        properties: []
+        location: '', // Default empty
+        status: 'Niet gespecificeerd', // Default status
+        type: 'item', // Default type
+        details: {}, // Default empty object for details
+        properties: [],
+        children: []
+      };
+      if (parentItem) {
+        return { ...parentItem, children: [...(parentItem.children || []), newItem] };
+      } else {
+        return [...prev, newItem];
       }
     }));
     setShowAddObjectModal(false);
-    if (isLargeScreen) {
-      setSelectedProperty(newId);
-      setCurrentScreen('propertyDetail');
-    }
   };
 
   const PropertyButton = ({ onClick }) => (
@@ -142,143 +167,95 @@ const App = () => {
     </TouchableOpacity>
   );
 
-  // --- SCREENS ---
-  const ObjectsScreen = () => (
-    <View style={[AppStyles.screen, isLargeScreen && AppStyles.objectsScreenDesktop]}>
-      <View style={AppStyles.header}>
-        <View style={AppStyles.headerFlex}>
-          <Text style={AppStyles.headerTitle}>Objecten</Text>
-          <View style={AppStyles.headerPlaceholder} />
-        </View>
-      </View>
-      <ScrollView style={AppStyles.contentPadding}>
-        <View style={AppStyles.cardList}>
-          {properties.map((property) => (
-            <TouchableOpacity
-              key={property.id}
-              style={[AppStyles.card, selectedProperty === property.id && isLargeScreen && AppStyles.selectedCard]}
-              onPress={() => { setSelectedProperty(property.id); setGeneratedDescription(''); setCurrentScreen('propertyDetail'); }}
-            >
-              <View style={AppStyles.cardFlex}>
-                <View style={AppStyles.cardContent}>
-                  <Text style={AppStyles.cardTitle}>{property.name}</Text>
-                  <Text style={AppStyles.cardSubtitle}>{property.location}</Text>
-                </View>
-                {!isLargeScreen && ( // Only show button on small screens
-                  <PropertyButton onClick={() => { setSelectedProperty(property.id); setCurrentScreen('properties'); }} />
-                )}
-              </View>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </ScrollView>
-      {/* FAB for mobile */}
-      {!isLargeScreen && (
-        <TouchableOpacity onPress={() => setShowAddObjectModal(true)} style={AppStyles.fab}>
-          <Plus color="white" size={24} />
-        </TouchableOpacity>
-      )}
-      {/* FAB for desktop (as per image, if it's there) */}
-      {isLargeScreen && (
-        <TouchableOpacity onPress={() => setShowAddObjectModal(true)} style={[AppStyles.fab, { position: 'relative', margin: 16, alignSelf: 'flex-end', bottom: 0, right: 0 }]}>
-            <Plus color="white" size={24} />
-        </TouchableOpacity>
-      )}
-    </View>
-  );
-
-  const PropertyDetailScreen = () => {
-    const property = selectedProperty ? propertyDetails[selectedProperty] : null;
-    if (!property) {
-      if (isLargeScreen) {
-        return (
-          <View style={[AppStyles.screen, AppStyles.mainContentPanel, { alignItems: 'center', justifyContent: 'center' }]}>
-            <Text style={AppStyles.emptyStateText}>Selecteer een object om details te bekijken</Text>
-          </View>
-        );
-      }
-      return null;
-    }
+  // --- HierarchicalObjectsScreen Component ---
+  const HierarchicalObjectsScreen = ({ items, currentLevelPath }) => {
+    const isRootLevel = currentLevelPath.length === 0;
+    const headerTitle = isRootLevel ? 'Objecten' : findItemByPath(objectsHierarchy, currentLevelPath)?.name || 'Items';
 
     return (
-      <View style={[AppStyles.screenWhite, { flex: 1 }]}>
+      <View style={AppStyles.screen}>
         <View style={AppStyles.header}>
           <View style={AppStyles.headerFlex}>
-            {!isLargeScreen && (
-              <TouchableOpacity onPress={() => setCurrentScreen('objects')} style={AppStyles.headerBackButton}>
+            {!isRootLevel && (
+              <TouchableOpacity onPress={() => {
+                setCurrentPath(currentLevelPath.slice(0, -1));
+                setCurrentScreen('objects');
+                setSelectedProperty(null); // Clear selected property when going back
+              }} style={AppStyles.headerBackButton}>
                 <ChevronLeft color={colors.lightGray700} size={24} />
               </TouchableOpacity>
             )}
-            <Text style={AppStyles.headerTitleLg}>Object Details</Text>
+            <Text style={AppStyles.headerTitle}>{headerTitle}</Text>
             <View style={AppStyles.headerPlaceholder} />
           </View>
-          <View style={AppStyles.detailHeader}>
-            <Text style={AppStyles.detailName}>{property.name}</Text>
-            <Text style={AppStyles.detailLocation}>{property.location}</Text>
-          </View>
         </View>
-        <ScrollView style={[AppStyles.contentPadding, AppStyles.screenContentWrapper]}>
-          <View style={AppStyles.infoBox}>
-            <Text style={[AppStyles.infoItemValue, { marginBottom: 0.75 * 16 }]}>Basisgegevens</Text>
-            <View style={AppStyles.infoGrid}>
-              {Object.entries(property.details).map(([key, value]) => (
-                <View key={key} style={AppStyles.infoGridItem}>
-                  <Text style={AppStyles.infoItemLabel}>{key}</Text>
-                  <Text style={AppStyles.infoItemValue}>{value}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-          <View style={AppStyles.aiSection}>
-            <TouchableOpacity onPress={() => generatePropertyDescription(property)} disabled={isGenerating} style={[AppStyles.btnPrimary, AppStyles.btnFull, AppStyles.btnPurple, AppStyles.btnFlexCenter, isGenerating && AppStyles.btnPurpleDisabled]}>
-              <Sparkles color="white" size={20} />
-              <Text style={AppStyles.btnPrimaryText}>{isGenerating ? 'Beschrijving genereren...' : '✨ Genereer Beschrijving'}</Text>
-            </TouchableOpacity>
-          </View>
-          {(isGenerating || generatedDescription) && (
-            <View style={AppStyles.aiDescriptionBox}>
-              <Text style={[AppStyles.infoItemValue, { marginBottom: 0.5 * 16 }]}>AI-gegenereerde Beschrijving</Text>
-              {isGenerating ? (
-                <View style={AppStyles.spinnerContainer}>
-                  <ActivityIndicator size="small" color={colors.purple600} />
-                </View>
-              ) : (
-                // Use a View to wrap Text if you need 'pre-wrap' like behavior
-                <Text style={AppStyles.infoItemLabel}>{generatedDescription}</Text>
-              )}
-            </View>
-          )}
-          <View style={{ marginTop: 1.5 * 16 }}>
-            <TouchableOpacity onPress={() => setCurrentScreen('properties')} style={[AppStyles.btnPrimary, AppStyles.btnFull]}>
-              <Text style={AppStyles.btnPrimaryText}>Bekijk Eigenschappen</Text>
-            </TouchableOpacity>
+        <ScrollView style={AppStyles.contentPadding}>
+          <View style={AppStyles.cardList}>
+            {items.length > 0 ? (
+              items.map((item) => (
+                <TouchableOpacity
+                  key={item.id}
+                  style={AppStyles.card}
+                  // Default behavior: drill down on card press
+                  onPress={() => {
+                    setSelectedProperty(null); // Clear any previously selected property for detail view
+                    setCurrentPath(currentLevelPath.concat(item.id));
+                    setCurrentScreen('objects'); // Stay on 'objects' screen to show next level or empty state
+                  }}
+                >
+                  <View style={AppStyles.cardFlex}>
+                    <View style={AppStyles.cardContent}>
+                      <Text style={AppStyles.cardTitle}>{item.name}</Text> {/* Only show name */}
+                    </View>
+                    {/* Eigenschappen button: This button will set selectedProperty and navigate directly to properties */}
+                    <PropertyButton onClick={(e) => {
+                      e.stopPropagation(); // Prevent card's onPress (drill down) from firing
+                      setSelectedProperty(item.id);
+                      setCurrentScreen('properties'); // Navigate directly to PropertiesScreen
+                    }} />
+                  </View>
+                </TouchableOpacity>
+              ))
+            ) : (
+              <View style={AppStyles.emptyState}>
+                <Text style={AppStyles.emptyStateText}>Geen items gevonden.</Text>
+                <Text style={AppStyles.emptyStateSubtext}>Klik op de '+' knop om een nieuw item toe te voegen aan deze {isRootLevel ? 'lijst' : 'locatie'}.</Text>
+              </View>
+            )}
           </View>
         </ScrollView>
+        <TouchableOpacity onPress={() => setShowAddObjectModal(true)} style={AppStyles.fab}>
+          <Plus color="white" size={24} />
+        </TouchableOpacity>
       </View>
     );
   };
 
-  const PropertiesScreen = () => {
-    const property = selectedProperty ? propertyDetails[selectedProperty] : null;
-    if (!property) return null;
-    const renderIcon = (iconName) => { const Icon = IconMap[iconName] || Box; return <Icon color={colors.lightGray500} size={20} />; };
+
+
+  const PropertiesScreen = ({ currentPath }) => {
+    const item = findItemByPath(objectsHierarchy, currentPath);
+    if (!item) return null;
+    // Changed icon size here as well for consistency
+    const renderIcon = (iconName, customColor = colors.lightGray500) => { const Icon = IconMap[iconName] || Box; return <Icon color={customColor} size={20} />; };
     return (
       <View style={[AppStyles.screen, { flex: 1 }]}>
         <View style={AppStyles.header}>
           <View style={AppStyles.headerFlex}>
-            {!isLargeScreen && <TouchableOpacity onPress={() => setCurrentScreen('propertyDetail')} style={AppStyles.headerBackButton}><ChevronLeft color={colors.lightGray700} size={24} /></TouchableOpacity>}
+            {/* Always show back button, now goes to 'objects' */}
+            <TouchableOpacity onPress={() => setCurrentScreen('objects')} style={AppStyles.headerBackButton}><ChevronLeft color={colors.lightGray700} size={24} /></TouchableOpacity>
             <Text style={AppStyles.headerTitleLg}>Eigenschappen</Text>
             <View style={AppStyles.headerPlaceholder} />
           </View>
         </View>
         <View style={{ backgroundColor: colors.white, padding: 1 * 16, borderBottomWidth: 1, borderBottomColor: colors.lightGray200 }}>
-          <Text style={AppStyles.detailName}>{property.name}</Text>
-          <Text style={AppStyles.detailLocation}>{property.location}</Text>
+          <Text style={AppStyles.detailName}>{item.name}</Text>
+          {item.location && <Text style={AppStyles.detailLocation}>{item.location}</Text>}
         </View>
         <ScrollView style={AppStyles.contentPadding}>
           <View style={AppStyles.propertyList}>
-            {property.properties.length > 0 ? (
-              property.properties.map((prop, index) => (
+            {(item.properties && item.properties.length > 0) ? (
+              item.properties.map((prop, index) => (
                 <View key={index} style={AppStyles.propertyItem}>
                   <View style={AppStyles.propertyItemMain}>{renderIcon(prop.icon)}<Text style={AppStyles.propertyName}>{prop.name}</Text></View>
                   <Text style={AppStyles.propertyValue}>{prop.value}</Text>
@@ -299,143 +276,163 @@ const App = () => {
     );
   };
 
-  const AddPropertyScreen = () => {
-    const property = selectedProperty ? propertyDetails[selectedProperty] : null;
-    if (!property) return null;
+  const AddPropertyScreen = ({ currentPath }) => {
+    const item = findItemByPath(objectsHierarchy, currentPath);
+    if (!item) return null;
 
-    const [newProperty, setNewProperty] = useState({
-      name: '',
-      value: '',
-      icon: 'Tag'
-    });
+    const [newPropertiesList, setNewPropertiesList] = useState([]);
+    const [nextNewPropertyId, setNextNewPropertyId] = useState(0);
 
-    const handleSave = () => {
-      if (newProperty.name.trim() && newProperty.value.trim()) {
-        handleAddProperty(selectedProperty, {
-          name: newProperty.name,
-          value: newProperty.value,
-          icon: newProperty.icon
-        });
-      } else {
-        Alert.alert("Invoer vereist", "Vul alstublieft zowel de eigenschap naam als de waarde in.");
-      }
+    // Initialize with one empty field when component mounts
+    useEffect(() => {
+        if (newPropertiesList.length === 0) {
+            addNewPropertyField(); // Add first empty field
+        }
+    }, []);
+
+    // Helper function for icon rendering within this component, allowing custom color
+    const renderIcon = (iconName, customColor = colors.lightGray500) => {
+      const Icon = IconMap[iconName] || Box; // Fallback to Box icon
+      return <Icon color={customColor} size={20} />;
     };
 
-    const renderIcon = (iconName) => {
-      const Icon = IconMap[iconName] || Box;
-      return <Icon color={newProperty.icon === iconName ? colors.blue600 : colors.lightGray600} size={24} />;
+    const addNewPropertyField = () => {
+      setNewPropertiesList(prevList => [
+        ...prevList,
+        { id: nextNewPropertyId, name: '', value: '', icon: 'Tag' } // Default to 'Tag' icon
+      ]);
+      setNextNewPropertyId(prevId => prevId + 1);
+    };
+
+    const removePropertyField = (idToRemove) => {
+      setNewPropertiesList(prevList => prevList.filter(prop => prop.id !== idToRemove));
+    };
+
+    const updateNewPropertyField = (idToUpdate, field, value) => {
+      setNewPropertiesList(prevList => prevList.map(prop =>
+        prop.id === idToUpdate ? { ...prop, [field]: value } : prop
+      ));
+    };
+
+    const handleSave = () => {
+        const validProperties = [];
+        let hasInvalid = false;
+
+        newPropertiesList.forEach(prop => {
+            if (prop.name.trim() && prop.value.trim()) {
+                validProperties.push({ name: prop.name, value: prop.value, icon: prop.icon });
+            } else if (prop.name.trim() || prop.value.trim()) { // If one is filled, but not the other
+                hasInvalid = true;
+            }
+        });
+
+        if (validProperties.length === 0) {
+            Alert.alert("Geen eigenschappen om op te slaan", "Vul alstublieft ten minste één geldige eigenschap (naam en waarde) in.");
+            return;
+        }
+
+        if (hasInvalid) {
+             Alert.alert("Ongeldige invoer", "Sommige eigenschappen zijn leeg gelaten of onvolledig en worden niet opgeslagen.");
+        }
+
+        handleAddProperty(currentPath, validProperties);
+        setNewPropertiesList([]); // Clear the list after saving
+        setNextNewPropertyId(0); // Reset ID counter
+        setCurrentScreen('properties'); // Go back to properties list
     };
 
     return (
       <View style={[AppStyles.screenWhite, { flex: 1 }]}>
-        {/* Header */}
         <View style={AppStyles.header}>
           <View style={AppStyles.headerFlex}>
-            {!isLargeScreen && (
-              <TouchableOpacity
-                onPress={() => setCurrentScreen('properties')}
-                style={AppStyles.headerBackButton}
-              >
-                <ChevronLeft color={colors.lightGray700} size={24} />
-              </TouchableOpacity>
-            )}
+            {/* Always show back button */}
+            <TouchableOpacity
+              onPress={() => setCurrentScreen('properties')}
+              style={AppStyles.headerBackButton}
+            >
+              <ChevronLeft color={colors.lightGray700} size={24} />
+            </TouchableOpacity>
             <Text style={AppStyles.headerTitleLg}>Eigenschap Toevoegen</Text>
             <View style={AppStyles.headerPlaceholder} />
           </View>
         </View>
 
-        {/* Property Info Section (as in image) */}
-        <View style={{ backgroundColor: colors.white, padding: 1 * 16, borderBottomWidth: 1, borderBottomColor: colors.lightGray200 }}>
-          <Text style={[AppStyles.detailName, { fontSize: 1.125 * 16, marginBottom: 0.5 * 16 }]}>{property.name}</Text>
-          {/* Replicating the three lines of detail from image */}
-          <View style={[AppStyles.propertyList, { gap: 0.75 * 16 }]}>
-            <View style={AppStyles.propertyDetailRow}>
-              <Text style={AppStyles.propertyDetailLabel}>WOZ</Text>
-              <Text style={AppStyles.propertyDetailValue}>{property.details['Woz']}</Text>
-            </View>
-            <View style={AppStyles.propertyDetailRow}>
-              <Text style={AppStyles.propertyDetailLabel}>GROOTTE</Text>
-              <Text style={AppStyles.propertyDetailValue}>{property.details['Grootte']}</Text>
-            </View>
-            <View style={[AppStyles.propertyDetailRow, { borderBottomWidth: 0 }]}>
-              <Text style={AppStyles.propertyDetailLabel}>MATERIAAL</Text>
-              <Text style={AppStyles.propertyDetailValue}>{property.details['Materiaal']}</Text>
-            </View>
+        {/* Added flex: 1 to the ScrollView here */}
+        <ScrollView style={[AppStyles.contentPadding, { flex: 1 }]}>
+          {/* Existing Custom Properties */}
+          <View style={[AppStyles.card, { marginTop: 0, marginBottom: 1.5 * 16, padding: 1 * 16 }]}>
+              <Text style={[AppStyles.infoItemValue, { marginBottom: 1 * 16, fontSize: 1 * 16, fontWeight: '600' }]}>Bestaande Eigenschappen</Text>
+              <View style={AppStyles.propertyList}>
+                  {(item.properties || []).length > 0 ? (
+                      (item.properties || []).map((prop, index) => (
+                          <View key={index} style={AppStyles.propertyItem}>
+                              <View style={AppStyles.propertyItemMain}>
+                                  {renderIcon(prop.icon)}
+                                  <Text style={AppStyles.propertyName}>{prop.name}</Text>
+                              </View>
+                              <Text style={AppStyles.propertyValue}>{prop.value}</Text>
+                          </View>
+                      ))
+                  ) : (
+                      <View style={AppStyles.emptyState}>
+                          <Text style={AppStyles.emptyStateText}>Geen bestaande eigenschappen.</Text>
+                      </View>
+                  )}
+              </View>
           </View>
-        </View>
 
-        {/* Custom Properties Section */}
-        <ScrollView style={[AppStyles.contentPadding, AppStyles.screenContentWrapper]}>
-          <Text style={[AppStyles.infoItemValue, { marginBottom: 1 * 16, fontSize: 1 * 16 }]}>Aangepaste Eigenschappen</Text>
+          {/* Section to add New Properties */}
+          <View style={[AppStyles.card, { marginBottom: 1.5 * 16, padding: 1 * 16 }]}>
+            <Text style={[AppStyles.infoItemValue, { marginBottom: 1 * 16, fontSize: 1 * 16, fontWeight: '600' }]}>Nieuwe Eigenschappen Toevoegen</Text>
 
-          <View style={[AppStyles.propertyList, { gap: 0.75 * 16, marginBottom: 1.5 * 16 }]}>
-            {property.properties.map((prop, index) => (
-              <View key={index} style={[AppStyles.card, { padding: 0.75 * 16 }]}>
-                <View style={[AppStyles.infoGrid, { flexDirection: 'row', justifyContent: 'space-between' }]}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={AppStyles.infoItemLabel}>EIGENSCHAP</Text>
-                    <Text style={AppStyles.infoItemValue}>{prop.name}</Text>
+            {newPropertiesList.map(prop => (
+              <View key={prop.id} style={{ marginBottom: 1.5 * 16, borderWidth: 1, borderColor: colors.lightGray200, borderRadius: 8, padding: 1 * 16 }}>
+                {/* Eigenschap Naam and Waarde side-by-side using formRow and formGroupHalf */}
+                <View style={AppStyles.formRow}>
+                  <View style={[AppStyles.formGroupHalf, { marginRight: 8 }]}> {/* Added marginRight */}
+                    <Text style={AppStyles.formLabel}>Eigenschap Naam</Text>
+                    <TextInput
+                      placeholder="Bijv. Gewicht"
+                      value={prop.name}
+                      onChangeText={(text) => updateNewPropertyField(prop.id, 'name', text)}
+                      style={AppStyles.formInput}
+                      placeholderTextColor={colors.lightGray400}
+                    />
                   </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={AppStyles.infoItemLabel}>WAARDE</Text>
-                    <Text style={AppStyles.infoItemValue}>{prop.value}</Text>
+
+                  <View style={[AppStyles.formGroupHalf, { marginLeft: 8 }]}> {/* Added marginLeft */}
+                    <Text style={AppStyles.formLabel}>Waarde</Text>
+                    <TextInput
+                      placeholder="Bijv. 2kg"
+                      value={prop.value}
+                      onChangeText={(text) => updateNewPropertyField(prop.id, 'value', text)}
+                      style={AppStyles.formInput}
+                      placeholderTextColor={colors.lightGray400}
+                    />
                   </View>
+                  {/* The X button moved here, next to the input fields, with a small top margin */}
+                  {newPropertiesList.length > 1 && ( // Only show remove if there's more than one field
+                      <TouchableOpacity
+                          onPress={() => removePropertyField(prop.id)}
+                          style={{ padding: 4, alignSelf: 'flex-start', marginTop:30, left:5,}} // Aligns with the top of the text input group, nudged down
+                      >
+                          <X color={colors.red600} size={20} />
+                      </TouchableOpacity>
+                  )}
                 </View>
               </View>
             ))}
+
+            <TouchableOpacity onPress={addNewPropertyField} style={[AppStyles.btnPrimary, AppStyles.btnFull, AppStyles.btnSecondary, { marginTop: 1 * 16 }]}>
+                <Plus color={colors.blue600} size={20} />
+                <Text style={[AppStyles.btnPrimaryText, { color: colors.blue600 }]}>Voeg Eigenschap Toe</Text>
+            </TouchableOpacity>
           </View>
 
-          {/* New Property Form */}
-          <View style={[AppStyles.card, { marginBottom: 1.5 * 16 }]}>
-            <Text style={[AppStyles.infoItemValue, { marginBottom: 1 * 16, fontSize: 1 * 16 }]}>Nieuwe Eigenschap</Text>
-
-            <View style={[AppStyles.formGroup, { marginBottom: 1 * 16 }]}>
-              <Text style={AppStyles.formLabel}>Eigenschap Naam</Text>
-              <TextInput
-                placeholder="Bijv. Gewicht"
-                value={newProperty.name}
-                onChangeText={(text) => setNewProperty({...newProperty, name: text})}
-                style={AppStyles.formInput}
-                placeholderTextColor={colors.lightGray400} // Set placeholder color
-              />
-            </View>
-
-            <View style={AppStyles.formGroup}>
-              <Text style={AppStyles.formLabel}>Waarde</Text>
-              <TextInput
-                placeholder="Bijv. 2kg"
-                value={newProperty.value}
-                onChangeText={(text) => setNewProperty({...newProperty, value: text})}
-                style={AppStyles.formInput}
-                placeholderTextColor={colors.lightGray400} // Set placeholder color
-              />
-            </View>
-          </View>
-
-          {/* Icon Selection */}
-          <View style={AppStyles.card}>
-            <Text style={[AppStyles.formLabel, { marginBottom: 0.75 * 16 }]}>Kies een icoon</Text>
-            <View style={AppStyles.iconGrid}>
-              {Object.keys(IconMap).map(iconKey => {
-                const Icon = IconMap[iconKey];
-                return (
-                  <TouchableOpacity
-                    key={iconKey}
-                    onPress={() => setNewProperty({...newProperty, icon: iconKey})}
-                    style={[AppStyles.iconWrapper, newProperty.icon === iconKey ? AppStyles.iconWrapperSelected : AppStyles.iconWrapperNotSelected]}
-                  >
-                    <Icon color={newProperty.icon === iconKey ? colors.blue600 : colors.lightGray600} size={24} />
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-
-          {/* Save Button */}
+          {/* Save Button at the very bottom */}
           <TouchableOpacity
             onPress={handleSave}
-            disabled={!newProperty.name.trim() || !newProperty.value.trim()}
-            style={[AppStyles.btnPrimary, AppStyles.btnFull, { marginTop: 1.5 * 16 }, (!newProperty.name.trim() || !newProperty.value.trim()) && AppStyles.btnPurpleDisabled]}
+            style={[AppStyles.btnPrimary, AppStyles.btnFull, { marginBottom: 1.5 * 16 }]}
           >
             <Text style={AppStyles.btnPrimaryText}>Eigenschap Opslaan</Text>
           </TouchableOpacity>
@@ -446,54 +443,34 @@ const App = () => {
 
   const AddObjectModal = () => {
     const [name, setName] = useState('');
-    const [location, setLocation] = useState('');
-    const [status, setStatus] = useState('Verhuurd');
-    const handleSaveObject = () => { if (name.trim() && location.trim()) { handleAddObject({ name, location, status }); } else { Alert.alert("Invoer vereist", "Vul alstublieft zowel de naam als de locatie in."); } };
+
+    const handleSaveObject = () => {
+      if (name.trim()) {
+        handleAddObject(currentPath, { name });
+      } else {
+        Alert.alert("Invoer vereist", "Vul alstublieft de naam in.");
+      }
+    };
+
     return (
       <Modal
-        animationType="fade" // Use fade for a smoother modal appearance
+        animationType="fade"
         transparent={true}
         visible={showAddObjectModal}
         onRequestClose={() => setShowAddObjectModal(false)}
       >
         <View style={AppStyles.modalBackdrop}>
           <View style={AppStyles.modalContent}>
-            <Text style={AppStyles.modalTitle}>Object Toevoegen</Text>
+            <Text style={AppStyles.modalTitle}>Item Toevoegen</Text>
             <View style={AppStyles.formGroup}>
               <Text style={AppStyles.formLabel}>Naam</Text>
               <TextInput
-                placeholder="Bijvoorbeeld: Kerkstraat 45"
+                placeholder="Bijvoorbeeld: Nieuwe Kamer"
                 value={name}
                 onChangeText={setName}
                 style={AppStyles.formInput}
                 placeholderTextColor={colors.lightGray400}
               />
-            </View>
-            <View style={AppStyles.formGroup}>
-              <Text style={AppStyles.formLabel}>Locatie</Text>
-              <TextInput
-                placeholder="Bijvoorbeeld: Amsterdam • 1017 GC"
-                value={location}
-                onChangeText={setLocation}
-                style={AppStyles.formInput}
-                placeholderTextColor={colors.lightGray400}
-              />
-            </View>
-            <View style={AppStyles.formGroup}>
-              <Text style={AppStyles.formLabel}>Status</Text>
-              <View style={AppStyles.formSelect}>
-                <Picker
-                  selectedValue={status}
-                  onValueChange={(itemValue) => setStatus(itemValue)}
-                  // The 'style' prop on Picker usually applies to the inner view.
-                  // For Android, you might need to wrap it in a View and style the View.
-                  itemStyle={{ color: colors.lightGray900 }} // This styles the text of the picker items on iOS. Android is different.
-                >
-                  <Picker.Item label="Verhuurd" value="Verhuurd" />
-                  <Picker.Item label="Leegstaand" value="Leegstaand" />
-                  <Picker.Item label="In onderhoud" value="In onderhoud" />
-                </Picker>
-              </View>
             </View>
             <View style={AppStyles.modalActions}>
               <TouchableOpacity onPress={() => setShowAddObjectModal(false)} style={AppStyles.btnSecondary}>
@@ -509,34 +486,37 @@ const App = () => {
     );
   };
 
+  // Get the items for the current level
+  const currentLevelItems = findItemByPath(objectsHierarchy, currentPath)?.children || (currentPath.length === 0 ? objectsHierarchy : []);
+
+  // Determine the item whose details/properties are being viewed.
+  // This is no longer needed since PropertyDetailScreen is removed, but keeping `selectedProperty` for other uses.
+  const itemForDetailView = selectedProperty ? findItemByPath(objectsHierarchy, currentPath.concat(selectedProperty)) : null;
+
   return (
     <View style={AppStyles.appContainer}>
-      {isLargeScreen ? (
-        <View style={AppStyles.twoPanelLayout}>
-          <ObjectsScreen />
-          <View style={AppStyles.mainContentPanel}>
-            {selectedProperty ? (
-                currentScreen === 'propertyDetail' ? <PropertyDetailScreen /> :
-                currentScreen === 'properties' ? <PropertiesScreen /> :
-                currentScreen === 'addProperty' ? <AddPropertyScreen /> :
-                <PropertyDetailScreen /> // Default to detail if a property is selected
-            ) : (
-                <PropertyDetailScreen /> // Show empty state if no property is selected
-            )}
-          </View>
-        </View>
-      ) : (
-        // Mobile rendering: only one screen at a time
-        (() => {
-          switch (currentScreen) {
-            case 'objects': return <ObjectsScreen />;
-            case 'propertyDetail': return <PropertyDetailScreen />;
-            case 'properties': return <PropertiesScreen />;
-            case 'addProperty': return <AddPropertyScreen />;
-            default: return <ObjectsScreen />;
-          }
-        })()
-      )}
+      {(() => {
+        switch (currentScreen) {
+          case 'objects':
+            return (
+              <HierarchicalObjectsScreen
+                items={currentLevelItems}
+                currentLevelPath={currentPath}
+              />
+            );
+          case 'properties':
+            return <PropertiesScreen currentPath={currentPath.concat(selectedProperty)} />;
+          case 'addProperty':
+            return <AddPropertyScreen currentPath={currentPath.concat(selectedProperty)} />;
+          default:
+            return (
+              <HierarchicalObjectsScreen
+                items={currentLevelItems}
+                currentLevelPath={currentPath}
+              />
+            );
+        }
+      })()}
       {showAddObjectModal && <AddObjectModal />}
     </View>
   );
