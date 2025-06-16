@@ -1,4 +1,4 @@
-import { StyleSheet, Dimensions } from 'react-native';
+import { Dimensions, Platform, StyleSheet } from 'react-native';
 
 const { width } = Dimensions.get('window');
 const IS_DESKTOP = width >= 768; // Define your breakpoint for responsive behavior
@@ -79,7 +79,8 @@ const AppStyles = StyleSheet.create({
   },
   header: {
     backgroundColor: colors.white,
-    paddingVertical: 1.5 * 16,
+    paddingTop: Platform.OS === 'ios' ? 48 : 40, // Added extra top padding for safe area
+    paddingBottom: 16,
     paddingHorizontal: 1 * 16,
     borderBottomWidth: 1,
     borderBottomColor: colors.lightGray200,

@@ -1,8 +1,7 @@
+import { Box, ChevronLeft, FileText, KeyRound, Paintbrush, Palette, Plus, Ruler, Tag, Wrench, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
-  Dimensions,
   Modal,
   ScrollView,
   Text,
@@ -10,12 +9,9 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
-import { Picker } from '@react-native-picker/picker';
-import { Box, ChevronLeft, FileText, KeyRound, Paintbrush, Palette, Plus, Ruler, Tag, Wrench, X } from 'lucide-react-native'; // Removed Sparkles
 
 import AppStyles, { colors } from './AppStyles';
 
-// Removed Sparkles from IconMap as it's no longer used
 const IconMap = { Palette, Ruler, Box, Wrench, Tag, KeyRound, FileText, Paintbrush };
 
 // Helper to find an item by path (e.g., [1, 101] finds item with id 101 inside item with id 1)
@@ -33,14 +29,14 @@ const findItemByPath = (data, path) => {
     }
 
     foundItem = item;
-    currentItems = item.children || []; // Move to children for next iteration
+    currentItems = item.children || [];
   }
   return foundItem;
 };
 
 // Helper to update an item by path (e.g., add a child)
 const updateItemByPath = (data, path, updateFn) => {
-  if (path.length === 0) { // Updating root level
+  if (path.length === 0) {
     const updatedData = updateFn(data);
     return updatedData;
   }
@@ -52,15 +48,14 @@ const updateItemByPath = (data, path, updateFn) => {
     const idToFind = path[i];
     const itemIndex = currentLevel.findIndex(item => item.id === idToFind);
 
-    if (itemIndex === -1) break; // Should not happen if path is valid
+    if (itemIndex === -1) break;
 
-    if (i === path.length - 1) { // Found the target item
+    if (i === path.length - 1) {
       currentLevel[itemIndex] = {
         ...currentLevel[itemIndex],
-        ...updateFn(currentLevel[itemIndex]) // Apply the update function
+        ...updateFn(currentLevel[itemIndex])
       };
     } else {
-      // Create a new array for children to maintain immutability
       currentLevel[itemIndex] = {
         ...currentLevel[itemIndex],
         children: [...(currentLevel[itemIndex].children || [])]
@@ -71,16 +66,11 @@ const updateItemByPath = (data, path, updateFn) => {
   return newData;
 };
 
-
 const App = () => {
   const [currentScreen, setCurrentScreen] = useState('objects');
-  const [selectedProperty, setSelectedProperty] = useState(null); // This now refers to the ID of the item whose *details/properties* are being viewed
+  const [selectedProperty, setSelectedProperty] = useState(null);
   const [showAddObjectModal, setShowAddObjectModal] = useState(false);
-
-  // New state for hierarchical navigation
-  const [currentPath, setCurrentPath] = useState([]); // e.g., [], [1], [1, 101]
-
-  // Removed isLargeScreen state and its useEffect as we are unifying the UI
+  const [currentPath, setCurrentPath] = useState([]);
 
   const [objectsHierarchy, setObjectsHierarchy] = useState([
     {
@@ -93,17 +83,25 @@ const App = () => {
       properties: [
         { name: 'Object', value: 'Test', icon: 'Box' },
         { name: 'Grootte', value: '20x20cm', icon: 'Ruler' },
-        { name: 'Kleur', value: 'Groen', value: 'Groen', icon: 'Palette' },
+        { name: 'Kleur', value: 'Groen', icon: 'Palette' }, // Fixed duplicate value
         { name: 'Materiaal', value: 'Hout', icon: 'Wrench' }
       ],
       children: [
-        { id: 101, name: 'Verdieping 1', location: '1e etage', status: 'Verhuurd', type: 'floor', details: { 'Woz': 'N.v.t.', 'Grootte': '15 m2', 'Materiaal': 'Beton' }, children: [
-            { id: 1011, name: 'Kamer 1', location: 'Links voor', status: 'Leegstaand', type: 'room', details: { 'Woz': 'N.v.t.', 'Grootte': '8 m2', 'Materiaal': 'Hout' }, children: [] },
-            { id: 1012, name: 'Kamer 2', location: 'Rechts achter', status: 'Verhuurd', type: 'room', details: { 'Woz': 'N.v.t.', 'Grootte': '7 m2', 'Materiaal': 'Hout' }, children: [] }
+        { 
+          id: 101, 
+          name: 'Verdieping 1', 
+          location: '1e etage', 
+          status: 'Verhuurd', 
+          type: 'floor', 
+          details: { 'Woz': 'N.v.t.', 'Grootte': '15 m2', 'Materiaal': 'Beton' }, 
+          properties: [],
+          children: [
+            { id: 1011, name: 'Kamer 1', location: 'Links voor', status: 'Leegstaand', type: 'room', details: { 'Woz': 'N.v.t.', 'Grootte': '8 m2', 'Materiaal': 'Hout' }, properties: [], children: [] },
+            { id: 1012, name: 'Kamer 2', location: 'Rechts achter', status: 'Verhuurd', type: 'room', details: { 'Woz': 'N.v.t.', 'Grootte': '7 m2', 'Materiaal': 'Hout' }, properties: [], children: [] }
           ]
         },
-        { id: 102, name: 'Verdieping 2', location: '2e etage', status: 'Leegstaand', type: 'floor', details: { 'Woz': 'N.v.t.', 'Grootte': '15 m2', 'Materiaal': 'Beton' }, children: [] },
-        { id: 103, name: 'Zolder', location: 'Bovenste etage', status: 'In onderhoud', type: 'attic', details: { 'Woz': 'N.v.t.', 'Grootte': '10 m2', 'Materiaal': 'Hout' }, children: [] }
+        { id: 102, name: 'Verdieping 2', location: '2e etage', status: 'Leegstaand', type: 'floor', details: { 'Woz': 'N.v.t.', 'Grootte': '15 m2', 'Materiaal': 'Beton' }, properties: [], children: [] },
+        { id: 103, name: 'Zolder', location: 'Bovenste etage', status: 'In onderhoud', type: 'attic', details: { 'Woz': 'N.v.t.', 'Grootte': '10 m2', 'Materiaal': 'Hout' }, properties: [], children: [] }
       ]
     },
     {
@@ -128,14 +126,11 @@ const App = () => {
     }
   ]);
 
-  // --- UTILITY FUNCTIONS ---
-  // Modified to accept an array of new properties
   const handleAddProperty = (targetPath, newPropertiesArray) => {
     setObjectsHierarchy(prev => updateItemByPath(prev, targetPath, (item) => ({
       ...item,
       properties: [...(item.properties || []), ...newPropertiesArray]
     })));
-    // setCurrentScreen('properties'); // Navigated after save
   };
 
   const handleAddObject = (parentPath, newObject) => {
@@ -145,10 +140,10 @@ const App = () => {
       const newItem = {
         id: newId,
         name: newObject.name,
-        location: '', // Default empty
-        status: 'Niet gespecificeerd', // Default status
-        type: 'item', // Default type
-        details: {}, // Default empty object for details
+        location: '',
+        status: 'Niet gespecificeerd',
+        type: 'item',
+        details: {},
         properties: [],
         children: []
       };
@@ -167,7 +162,6 @@ const App = () => {
     </TouchableOpacity>
   );
 
-  // --- HierarchicalObjectsScreen Component ---
   const HierarchicalObjectsScreen = ({ items, currentLevelPath }) => {
     const isRootLevel = currentLevelPath.length === 0;
     const headerTitle = isRootLevel ? 'Objecten' : findItemByPath(objectsHierarchy, currentLevelPath)?.name || 'Items';
@@ -180,7 +174,7 @@ const App = () => {
               <TouchableOpacity onPress={() => {
                 setCurrentPath(currentLevelPath.slice(0, -1));
                 setCurrentScreen('objects');
-                setSelectedProperty(null); // Clear selected property when going back
+                setSelectedProperty(null);
               }} style={AppStyles.headerBackButton}>
                 <ChevronLeft color={colors.lightGray700} size={24} />
               </TouchableOpacity>
@@ -196,22 +190,23 @@ const App = () => {
                 <TouchableOpacity
                   key={item.id}
                   style={AppStyles.card}
-                  // Default behavior: drill down on card press
                   onPress={() => {
-                    setSelectedProperty(null); // Clear any previously selected property for detail view
+                    setSelectedProperty(null);
                     setCurrentPath(currentLevelPath.concat(item.id));
-                    setCurrentScreen('objects'); // Stay on 'objects' screen to show next level or empty state
+                    setCurrentScreen('objects');
                   }}
                 >
                   <View style={AppStyles.cardFlex}>
                     <View style={AppStyles.cardContent}>
-                      <Text style={AppStyles.cardTitle}>{item.name}</Text> {/* Only show name */}
+                      <Text style={AppStyles.cardTitle}>{item.name}</Text>
+                      <Text style={AppStyles.cardSubtitle}>
+                        {(item.properties || []).length} eigenschap{(item.properties || []).length !== 1 ? 'pen' : ''}
+                      </Text>
                     </View>
-                    {/* Eigenschappen button: This button will set selectedProperty and navigate directly to properties */}
                     <PropertyButton onClick={(e) => {
-                      e.stopPropagation(); // Prevent card's onPress (drill down) from firing
+                      e.stopPropagation();
                       setSelectedProperty(item.id);
-                      setCurrentScreen('properties'); // Navigate directly to PropertiesScreen
+                      setCurrentScreen('properties');
                     }} />
                   </View>
                 </TouchableOpacity>
@@ -219,7 +214,9 @@ const App = () => {
             ) : (
               <View style={AppStyles.emptyState}>
                 <Text style={AppStyles.emptyStateText}>Geen items gevonden.</Text>
-                <Text style={AppStyles.emptyStateSubtext}>Klik op de '+' knop om een nieuw item toe te voegen aan deze {isRootLevel ? 'lijst' : 'locatie'}.</Text>
+                <Text style={AppStyles.emptyStateSubtext}>
+                  Klik op de '+' knop om een nieuw item toe te voegen aan deze {isRootLevel ? 'lijst' : 'locatie'}.
+                </Text>
               </View>
             )}
           </View>
@@ -231,19 +228,22 @@ const App = () => {
     );
   };
 
-
-
   const PropertiesScreen = ({ currentPath }) => {
     const item = findItemByPath(objectsHierarchy, currentPath);
     if (!item) return null;
-    // Changed icon size here as well for consistency
-    const renderIcon = (iconName, customColor = colors.lightGray500) => { const Icon = IconMap[iconName] || Box; return <Icon color={customColor} size={20} />; };
+    
+    const renderIcon = (iconName, customColor = colors.lightGray500) => { 
+      const Icon = IconMap[iconName] || Box; 
+      return <Icon color={customColor} size={20} />; 
+    };
+    
     return (
       <View style={[AppStyles.screen, { flex: 1 }]}>
         <View style={AppStyles.header}>
           <View style={AppStyles.headerFlex}>
-            {/* Always show back button, now goes to 'objects' */}
-            <TouchableOpacity onPress={() => setCurrentScreen('objects')} style={AppStyles.headerBackButton}><ChevronLeft color={colors.lightGray700} size={24} /></TouchableOpacity>
+            <TouchableOpacity onPress={() => setCurrentScreen('objects')} style={AppStyles.headerBackButton}>
+              <ChevronLeft color={colors.lightGray700} size={24} />
+            </TouchableOpacity>
             <Text style={AppStyles.headerTitleLg}>Eigenschappen</Text>
             <View style={AppStyles.headerPlaceholder} />
           </View>
@@ -257,7 +257,10 @@ const App = () => {
             {(item.properties && item.properties.length > 0) ? (
               item.properties.map((prop, index) => (
                 <View key={index} style={AppStyles.propertyItem}>
-                  <View style={AppStyles.propertyItemMain}>{renderIcon(prop.icon)}<Text style={AppStyles.propertyName}>{prop.name}</Text></View>
+                  <View style={AppStyles.propertyItemMain}>
+                    {renderIcon(prop.icon)}
+                    <Text style={AppStyles.propertyName}>{prop.name}</Text>
+                  </View>
                   <Text style={AppStyles.propertyValue}>{prop.value}</Text>
                 </View>
               ))
@@ -283,23 +286,21 @@ const App = () => {
     const [newPropertiesList, setNewPropertiesList] = useState([]);
     const [nextNewPropertyId, setNextNewPropertyId] = useState(0);
 
-    // Initialize with one empty field when component mounts
     useEffect(() => {
         if (newPropertiesList.length === 0) {
-            addNewPropertyField(); // Add first empty field
+            addNewPropertyField();
         }
     }, []);
 
-    // Helper function for icon rendering within this component, allowing custom color
     const renderIcon = (iconName, customColor = colors.lightGray500) => {
-      const Icon = IconMap[iconName] || Box; // Fallback to Box icon
+      const Icon = IconMap[iconName] || Box;
       return <Icon color={customColor} size={20} />;
     };
 
     const addNewPropertyField = () => {
       setNewPropertiesList(prevList => [
         ...prevList,
-        { id: nextNewPropertyId, name: '', value: '', icon: 'Tag' } // Default to 'Tag' icon
+        { id: nextNewPropertyId, name: '', value: '', icon: 'Tag' }
       ]);
       setNextNewPropertyId(prevId => prevId + 1);
     };
@@ -321,7 +322,7 @@ const App = () => {
         newPropertiesList.forEach(prop => {
             if (prop.name.trim() && prop.value.trim()) {
                 validProperties.push({ name: prop.name, value: prop.value, icon: prop.icon });
-            } else if (prop.name.trim() || prop.value.trim()) { // If one is filled, but not the other
+            } else if (prop.name.trim() || prop.value.trim()) {
                 hasInvalid = true;
             }
         });
@@ -336,16 +337,15 @@ const App = () => {
         }
 
         handleAddProperty(currentPath, validProperties);
-        setNewPropertiesList([]); // Clear the list after saving
-        setNextNewPropertyId(0); // Reset ID counter
-        setCurrentScreen('properties'); // Go back to properties list
+        setNewPropertiesList([]);
+        setNextNewPropertyId(0);
+        setCurrentScreen('properties');
     };
 
     return (
       <View style={[AppStyles.screenWhite, { flex: 1 }]}>
         <View style={AppStyles.header}>
           <View style={AppStyles.headerFlex}>
-            {/* Always show back button */}
             <TouchableOpacity
               onPress={() => setCurrentScreen('properties')}
               style={AppStyles.headerBackButton}
@@ -357,11 +357,11 @@ const App = () => {
           </View>
         </View>
 
-        {/* Added flex: 1 to the ScrollView here */}
         <ScrollView style={[AppStyles.contentPadding, { flex: 1 }]}>
-          {/* Existing Custom Properties */}
           <View style={[AppStyles.card, { marginTop: 0, marginBottom: 1.5 * 16, padding: 1 * 16 }]}>
-              <Text style={[AppStyles.infoItemValue, { marginBottom: 1 * 16, fontSize: 1 * 16, fontWeight: '600' }]}>Bestaande Eigenschappen</Text>
+              <Text style={[AppStyles.infoItemValue, { marginBottom: 1 * 16, fontSize: 1 * 16, fontWeight: '600' }]}>
+                Bestaande Eigenschappen
+              </Text>
               <View style={AppStyles.propertyList}>
                   {(item.properties || []).length > 0 ? (
                       (item.properties || []).map((prop, index) => (
@@ -381,15 +381,15 @@ const App = () => {
               </View>
           </View>
 
-          {/* Section to add New Properties */}
           <View style={[AppStyles.card, { marginBottom: 1.5 * 16, padding: 1 * 16 }]}>
-            <Text style={[AppStyles.infoItemValue, { marginBottom: 1 * 16, fontSize: 1 * 16, fontWeight: '600' }]}>Nieuwe Eigenschappen Toevoegen</Text>
+            <Text style={[AppStyles.infoItemValue, { marginBottom: 1 * 16, fontSize: 1 * 16, fontWeight: '600' }]}>
+              Nieuwe Eigenschappen Toevoegen
+            </Text>
 
             {newPropertiesList.map(prop => (
               <View key={prop.id} style={{ marginBottom: 1.5 * 16, borderWidth: 1, borderColor: colors.lightGray200, borderRadius: 8, padding: 1 * 16 }}>
-                {/* Eigenschap Naam and Waarde side-by-side using formRow and formGroupHalf */}
                 <View style={AppStyles.formRow}>
-                  <View style={[AppStyles.formGroupHalf, { marginRight: 8 }]}> {/* Added marginRight */}
+                  <View style={[AppStyles.formGroupHalf, { marginRight: 8 }]}>
                     <Text style={AppStyles.formLabel}>Eigenschap Naam</Text>
                     <TextInput
                       placeholder="Bijv. Gewicht"
@@ -400,7 +400,7 @@ const App = () => {
                     />
                   </View>
 
-                  <View style={[AppStyles.formGroupHalf, { marginLeft: 8 }]}> {/* Added marginLeft */}
+                  <View style={[AppStyles.formGroupHalf, { marginLeft: 8 }]}>
                     <Text style={AppStyles.formLabel}>Waarde</Text>
                     <TextInput
                       placeholder="Bijv. 2kg"
@@ -410,11 +410,10 @@ const App = () => {
                       placeholderTextColor={colors.lightGray400}
                     />
                   </View>
-                  {/* The X button moved here, next to the input fields, with a small top margin */}
-                  {newPropertiesList.length > 1 && ( // Only show remove if there's more than one field
+                  {newPropertiesList.length > 1 && (
                       <TouchableOpacity
                           onPress={() => removePropertyField(prop.id)}
-                          style={{ padding: 4, alignSelf: 'flex-start', marginTop:30, left:5,}} // Aligns with the top of the text input group, nudged down
+                          style={{ padding: 4, alignSelf: 'flex-start', marginTop: 30, left: 5 }}
                       >
                           <X color={colors.red600} size={20} />
                       </TouchableOpacity>
@@ -429,7 +428,6 @@ const App = () => {
             </TouchableOpacity>
           </View>
 
-          {/* Save Button at the very bottom */}
           <TouchableOpacity
             onPress={handleSave}
             style={[AppStyles.btnPrimary, AppStyles.btnFull, { marginBottom: 1.5 * 16 }]}
@@ -486,12 +484,7 @@ const App = () => {
     );
   };
 
-  // Get the items for the current level
   const currentLevelItems = findItemByPath(objectsHierarchy, currentPath)?.children || (currentPath.length === 0 ? objectsHierarchy : []);
-
-  // Determine the item whose details/properties are being viewed.
-  // This is no longer needed since PropertyDetailScreen is removed, but keeping `selectedProperty` for other uses.
-  const itemForDetailView = selectedProperty ? findItemByPath(objectsHierarchy, currentPath.concat(selectedProperty)) : null;
 
   return (
     <View style={AppStyles.appContainer}>
