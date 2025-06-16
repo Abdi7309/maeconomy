@@ -151,6 +151,11 @@ const AppStyles = StyleSheet.create({
     fontSize: 0.875 * 16,
     color: colors.lightGray500,
   },
+  detailSubtitle: {
+    fontSize: 0.875 * 16,
+    color: colors.lightGray500,
+    marginTop: 0.25 * 16,
+  },
   cardList: {
     flexDirection: 'column',
     gap: 1 * 16,
@@ -176,6 +181,11 @@ const AppStyles = StyleSheet.create({
     color: colors.lightGray900,
     marginBottom: 0.25 * 16,
     fontSize: 1.125 * 16, // Example size, adjust as needed
+  },
+  cardSubtitle: {
+    fontSize: 0.875 * 16,
+    color: colors.lightGray500,
+    marginTop: 0.25 * 16,
   },
   cardLocation: {
     fontSize: 0.875 * 16,
@@ -437,6 +447,83 @@ const AppStyles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     marginTop: 1.25 * 16,
+  },
+  // New button styles
+  btnPropertyOutline: {
+    backgroundColor: 'transparent',
+    paddingVertical: 0.5 * 16,
+    paddingHorizontal: 0.75 * 16,
+    borderRadius: 0.375 * 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.lightGray300,
+  },
+  btnPropertyOutlineText: {
+    color: colors.lightGray600,
+    fontSize: 0.875 * 16,
+    fontWeight: '500',
+  },
+
+  btnPropertyIcon: {
+    backgroundColor: colors.lightGray50,
+    paddingVertical: 0.5 * 16,
+    paddingHorizontal: 0.75 * 16,
+    borderRadius: 0.375 * 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 0.25 * 16,
+    borderWidth: 1,
+    borderColor: colors.lightGray200,
+  },
+  btnPropertyIconText: {
+    color: colors.lightGray600,
+    fontSize: 0.875 * 16,
+    fontWeight: '500',
+  },
+
+  btnPropertyText: {
+    backgroundColor: 'transparent',
+    paddingVertical: 0.5 * 16,
+    paddingHorizontal: 0.5 * 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  btnPropertyTextOnly: {
+    color: colors.blue600,
+    fontSize: 0.875 * 16,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+  },
+
+  btnPropertyChip: {
+    backgroundColor: colors.lightGray100,
+    paddingVertical: 0.375 * 16,
+    paddingHorizontal: 0.625 * 16,
+    borderRadius: 9999,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  btnPropertyChipText: {
+    color: colors.lightGray700,
+    fontSize: 0.75 * 16,
+    fontWeight: '500',
+  },
+
+  btnPropertyChevron: {
+    backgroundColor: 'transparent',
+    paddingVertical: 0.5 * 16,
+    paddingHorizontal: 0.5 * 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 0.25 * 16,
+  },
+  btnPropertyChevronText: {
+    color: colors.lightGray600,
+    fontSize: 0.875 * 16,
+    fontWeight: '500',
   },
 });
 

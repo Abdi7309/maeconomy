@@ -1,5 +1,5 @@
-import { Box, ChevronLeft, FileText, KeyRound, Paintbrush, Palette, Plus, Ruler, Tag, Wrench, X } from 'lucide-react-native';
-import { useEffect, useState } from 'react';
+import { Box, ChevronLeft, ChevronRight, FileText, KeyRound, Paintbrush, Palette, Plus, Ruler, Tag, Wrench, X } from 'lucide-react-native';
+import { useEffect, useState } from 'react'; // useRef is still imported but not used for debounce
 import {
   Alert,
   Modal,
@@ -34,31 +34,40 @@ const findItemByPath = (data, path) => {
   return foundItem;
 };
 
-// Helper to update an item by path (e.g., add a child)
+// Helper to update an item by path (e.g., add a child, or update properties)
 const updateItemByPath = (data, path, updateFn) => {
   if (path.length === 0) {
+    // This case is for updating the root level if path is empty.
+    // For properties, path will always have at least one element.
     const updatedData = updateFn(data);
     return updatedData;
   }
 
-  const newData = [...data];
+  const newData = [...data]; // Create a shallow copy of the top-level array
   let currentLevel = newData;
 
   for (let i = 0; i < path.length; i++) {
     const idToFind = path[i];
     const itemIndex = currentLevel.findIndex(item => item.id === idToFind);
 
-    if (itemIndex === -1) break;
+    if (itemIndex === -1) {
+      // Item not found, return original data or handle error
+      console.error(`Item with ID ${idToFind} not found at path segment ${i}`);
+      return data;
+    }
 
+    // If it's the last item in the path, apply the update function
     if (i === path.length - 1) {
       currentLevel[itemIndex] = {
         ...currentLevel[itemIndex],
         ...updateFn(currentLevel[itemIndex])
       };
     } else {
+      // Not the target item, so create a new object for the parent
+      // and recurse into its children to maintain immutability
       currentLevel[itemIndex] = {
         ...currentLevel[itemIndex],
-        children: [...(currentLevel[itemIndex].children || [])]
+        children: [...(currentLevel[itemIndex].children || [])] // Ensure children array is also copied
       };
       currentLevel = currentLevel[itemIndex].children;
     }
@@ -87,13 +96,13 @@ const App = () => {
         { name: 'Materiaal', value: 'Hout', icon: 'Wrench' }
       ],
       children: [
-        { 
-          id: 101, 
-          name: 'Verdieping 1', 
-          location: '1e etage', 
-          status: 'Verhuurd', 
-          type: 'floor', 
-          details: { 'Woz': 'N.v.t.', 'Grootte': '15 m2', 'Materiaal': 'Beton' }, 
+        {
+          id: 101,
+          name: 'Verdieping 1',
+          location: '1e etage',
+          status: 'Verhuurd',
+          type: 'floor',
+          details: { 'Woz': 'N.v.t.', 'Grootte': '15 m2', 'Materiaal': 'Beton' },
           properties: [],
           children: [
             { id: 1011, name: 'Kamer 1', location: 'Links voor', status: 'Leegstaand', type: 'room', details: { 'Woz': 'N.v.t.', 'Grootte': '8 m2', 'Materiaal': 'Hout' }, properties: [], children: [] },
@@ -126,10 +135,11 @@ const App = () => {
     }
   ]);
 
-  const handleAddProperty = (targetPath, newPropertiesArray) => {
+  // Function for adding a single property, used for auto-save (though now only on back)
+  const addSinglePropertyToItem = (targetPath, newProperty) => {
     setObjectsHierarchy(prev => updateItemByPath(prev, targetPath, (item) => ({
       ...item,
-      properties: [...(item.properties || []), ...newPropertiesArray]
+      properties: [...(item.properties || []), newProperty]
     })));
   };
 
@@ -157,8 +167,9 @@ const App = () => {
   };
 
   const PropertyButton = ({ onClick }) => (
-    <TouchableOpacity onPress={onClick} style={AppStyles.btnPrimary}>
-      <Text style={AppStyles.btnPrimaryText}>Eigenschappen</Text>
+    <TouchableOpacity onPress={onClick} style={AppStyles.btnPropertyChevron}>
+      <Text style={AppStyles.btnPropertyChevronText}>Eigenschappen</Text>
+      <ChevronRight color={colors.lightGray400} size={16} />
     </TouchableOpacity>
   );
 
@@ -231,12 +242,12 @@ const App = () => {
   const PropertiesScreen = ({ currentPath }) => {
     const item = findItemByPath(objectsHierarchy, currentPath);
     if (!item) return null;
-    
-    const renderIcon = (iconName, customColor = colors.lightGray500) => { 
-      const Icon = IconMap[iconName] || Box; 
-      return <Icon color={customColor} size={20} />; 
+
+    const renderIcon = (iconName, customColor = colors.lightGray500) => {
+      const Icon = IconMap[iconName] || Box;
+      return <Icon color={customColor} size={20} />;
     };
-    
+
     return (
       <View style={[AppStyles.screen, { flex: 1 }]}>
         <View style={AppStyles.header}>
@@ -250,7 +261,9 @@ const App = () => {
         </View>
         <View style={{ backgroundColor: colors.white, padding: 1 * 16, borderBottomWidth: 1, borderBottomColor: colors.lightGray200 }}>
           <Text style={AppStyles.detailName}>{item.name}</Text>
-          {item.location && <Text style={AppStyles.detailLocation}>{item.location}</Text>}
+          <Text style={AppStyles.detailSubtitle}>
+            {(item.properties || []).length} eigenschap{(item.properties || []).length !== 1 ? 'pen' : ''}
+          </Text>
         </View>
         <ScrollView style={AppStyles.contentPadding}>
           <View style={AppStyles.propertyList}>
@@ -286,11 +299,12 @@ const App = () => {
     const [newPropertiesList, setNewPropertiesList] = useState([]);
     const [nextNewPropertyId, setNextNewPropertyId] = useState(0);
 
+    // Effect to ensure there's always at least one empty field for input
     useEffect(() => {
-        if (newPropertiesList.length === 0) {
-            addNewPropertyField();
-        }
-    }, []);
+      if (newPropertiesList.length === 0) {
+        addNewPropertyField();
+      }
+    }, [newPropertiesList]);
 
     const renderIcon = (iconName, customColor = colors.lightGray500) => {
       const Icon = IconMap[iconName] || Box;
@@ -298,48 +312,53 @@ const App = () => {
     };
 
     const addNewPropertyField = () => {
-      setNewPropertiesList(prevList => [
-        ...prevList,
-        { id: nextNewPropertyId, name: '', value: '', icon: 'Tag' }
-      ]);
-      setNextNewPropertyId(prevId => prevId + 1);
+      setNewPropertiesList(prevList => {
+        // Only add a new field if the list is empty or the last field is not empty
+        const lastProp = prevList[prevList.length - 1];
+        if (prevList.length > 0 && lastProp.name.trim() === '' && lastProp.value.trim() === '') {
+          return prevList; // An empty field already exists, don't add another
+        }
+        const newField = { id: nextNewPropertyId, name: '', value: '', icon: 'Tag' };
+        setNextNewPropertyId(prevId => prevId + 1); // Increment ID for the next field
+        return [...prevList, newField];
+      });
     };
 
     const removePropertyField = (idToRemove) => {
       setNewPropertiesList(prevList => prevList.filter(prop => prop.id !== idToRemove));
     };
 
-    const updateNewPropertyField = (idToUpdate, field, value) => {
-      setNewPropertiesList(prevList => prevList.map(prop =>
-        prop.id === idToUpdate ? { ...prop, [field]: value } : prop
-      ));
+    const handlePropertyFieldChange = (idToUpdate, field, value) => {
+      // This function now only updates the local state; no auto-save logic here.
+      setNewPropertiesList(prevList => {
+        const updatedList = prevList.map(prop =>
+          prop.id === idToUpdate ? { ...prop, [field]: value } : prop
+        );
+        return updatedList;
+      });
     };
 
-    const handleSave = () => {
-        const validProperties = [];
-        let hasInvalid = false;
-
-        newPropertiesList.forEach(prop => {
-            if (prop.name.trim() && prop.value.trim()) {
-                validProperties.push({ name: prop.name, value: prop.value, icon: prop.icon });
-            } else if (prop.name.trim() || prop.value.trim()) {
-                hasInvalid = true;
-            }
-        });
-
-        if (validProperties.length === 0) {
-            Alert.alert("Geen eigenschappen om op te slaan", "Vul alstublieft ten minste één geldige eigenschap (naam en waarde) in.");
-            return;
+    // Function to handle saving unsaved properties on back navigation
+    const handleSaveOnBack = () => {
+      const validPropertiesToSave = [];
+      newPropertiesList.forEach(prop => {
+        if (prop.name.trim() !== '' && prop.value.trim() !== '') {
+          validPropertiesToSave.push({ name: prop.name.trim(), value: prop.value.trim(), icon: prop.icon });
         }
+      });
 
-        if (hasInvalid) {
-             Alert.alert("Ongeldige invoer", "Sommige eigenschappen zijn leeg gelaten of onvolledig en worden niet opgeslagen.");
-        }
+      if (validPropertiesToSave.length > 0) {
+        // Add all valid unsaved properties to the item
+        setObjectsHierarchy(prev => updateItemByPath(prev, currentPath, (itemToUpdate) => ({
+          ...itemToUpdate,
+          properties: [...(itemToUpdate.properties || []), ...validPropertiesToSave]
+        })));
+      }
 
-        handleAddProperty(currentPath, validProperties);
-        setNewPropertiesList([]);
-        setNextNewPropertyId(0);
-        setCurrentScreen('properties');
+      // Clear the new properties list after saving/discarding
+      setNewPropertiesList([]);
+      setNextNewPropertyId(0);
+      setCurrentScreen('properties'); // Navigate back to properties screen
     };
 
     return (
@@ -347,7 +366,7 @@ const App = () => {
         <View style={AppStyles.header}>
           <View style={AppStyles.headerFlex}>
             <TouchableOpacity
-              onPress={() => setCurrentScreen('properties')}
+              onPress={handleSaveOnBack} // Call the new save function on back
               style={AppStyles.headerBackButton}
             >
               <ChevronLeft color={colors.lightGray700} size={24} />
@@ -359,26 +378,26 @@ const App = () => {
 
         <ScrollView style={[AppStyles.contentPadding, { flex: 1 }]}>
           <View style={[AppStyles.card, { marginTop: 0, marginBottom: 1.5 * 16, padding: 1 * 16 }]}>
-              <Text style={[AppStyles.infoItemValue, { marginBottom: 1 * 16, fontSize: 1 * 16, fontWeight: '600' }]}>
-                Bestaande Eigenschappen
-              </Text>
-              <View style={AppStyles.propertyList}>
-                  {(item.properties || []).length > 0 ? (
-                      (item.properties || []).map((prop, index) => (
-                          <View key={index} style={AppStyles.propertyItem}>
-                              <View style={AppStyles.propertyItemMain}>
-                                  {renderIcon(prop.icon)}
-                                  <Text style={AppStyles.propertyName}>{prop.name}</Text>
-                              </View>
-                              <Text style={AppStyles.propertyValue}>{prop.value}</Text>
-                          </View>
-                      ))
-                  ) : (
-                      <View style={AppStyles.emptyState}>
-                          <Text style={AppStyles.emptyStateText}>Geen bestaande eigenschappen.</Text>
-                      </View>
-                  )}
-              </View>
+            <Text style={[AppStyles.infoItemValue, { marginBottom: 1 * 16, fontSize: 1 * 16, fontWeight: '600' }]}>
+              Bestaande Eigenschappen
+            </Text>
+            <View style={AppStyles.propertyList}>
+              {(item.properties || []).length > 0 ? (
+                (item.properties || []).map((prop, index) => (
+                  <View key={index} style={AppStyles.propertyItem}>
+                    <View style={AppStyles.propertyItemMain}>
+                      {renderIcon(prop.icon)}
+                      <Text style={AppStyles.propertyName}>{prop.name}</Text>
+                    </View>
+                    <Text style={AppStyles.propertyValue}>{prop.value}</Text>
+                  </View>
+                ))
+              ) : (
+                <View style={AppStyles.emptyState}>
+                  <Text style={AppStyles.emptyStateText}>Geen bestaande eigenschappen.</Text>
+                </View>
+              )}
+            </View>
           </View>
 
           <View style={[AppStyles.card, { marginBottom: 1.5 * 16, padding: 1 * 16 }]}>
@@ -394,7 +413,7 @@ const App = () => {
                     <TextInput
                       placeholder="Bijv. Gewicht"
                       value={prop.name}
-                      onChangeText={(text) => updateNewPropertyField(prop.id, 'name', text)}
+                      onChangeText={(text) => handlePropertyFieldChange(prop.id, 'name', text)}
                       style={AppStyles.formInput}
                       placeholderTextColor={colors.lightGray400}
                     />
@@ -405,35 +424,38 @@ const App = () => {
                     <TextInput
                       placeholder="Bijv. 2kg"
                       value={prop.value}
-                      onChangeText={(text) => updateNewPropertyField(prop.id, 'value', text)}
+                      onChangeText={(text) => handlePropertyFieldChange(prop.id, 'value', text)}
                       style={AppStyles.formInput}
                       placeholderTextColor={colors.lightGray400}
                     />
                   </View>
-                  {newPropertiesList.length > 1 && (
+                  {/* Show remove button if there's more than one field, or if it's the only one and not empty */}
+                  {newPropertiesList.length > 1 || (newPropertiesList.length === 1 && (prop.name.trim() !== '' || prop.value.trim() !== '')) ? (
                       <TouchableOpacity
                           onPress={() => removePropertyField(prop.id)}
                           style={{ padding: 4, alignSelf: 'flex-start', marginTop: 30, left: 5 }}
                       >
                           <X color={colors.red600} size={20} />
                       </TouchableOpacity>
-                  )}
+                  ) : null}
                 </View>
               </View>
             ))}
 
-            <TouchableOpacity onPress={addNewPropertyField} style={[AppStyles.btnPrimary, AppStyles.btnFull, AppStyles.btnSecondary, { marginTop: 1 * 16 }]}>
+            <TouchableOpacity 
+                onPress={addNewPropertyField} 
+                style={[
+                    AppStyles.btnPrimary, 
+                    AppStyles.btnFull, 
+                    AppStyles.btnSecondary, 
+                    AppStyles.btnFlexCenter,
+                    { marginTop: 1 * 16 }
+                ]}
+            >
                 <Plus color={colors.blue600} size={20} />
                 <Text style={[AppStyles.btnPrimaryText, { color: colors.blue600 }]}>Voeg Eigenschap Toe</Text>
             </TouchableOpacity>
           </View>
-
-          <TouchableOpacity
-            onPress={handleSave}
-            style={[AppStyles.btnPrimary, AppStyles.btnFull, { marginBottom: 1.5 * 16 }]}
-          >
-            <Text style={AppStyles.btnPrimaryText}>Eigenschap Opslaan</Text>
-          </TouchableOpacity>
         </ScrollView>
       </View>
     );
