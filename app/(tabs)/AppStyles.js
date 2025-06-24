@@ -532,6 +532,25 @@ const AppStyles = StyleSheet.create({
         fontSize: 0.875 * 16,
         fontWeight: '500',
     },
+    pickerContainer: {
+        marginTop: 8,
+        marginBottom: 8,
+        minHeight: 32,
+        height: 48, // Make it a bit taller for iOS
+        justifyContent: 'center',
+        backgroundColor: colors.white,
+        borderWidth: 1.5, // Always 1.5 for visibility
+        borderColor: colors.lightGray300,
+        borderRadius: 8,
+        paddingHorizontal: 8, // Add horizontal padding so border is visible
+        overflow: 'hidden', // Prevent Picker from overflowing border
+        ...(Platform.OS === 'ios' && {
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 1 },
+            shadowOpacity: 0.08,
+            shadowRadius: 2,
+        }),
+    },
 });
 
 export default AppStyles;

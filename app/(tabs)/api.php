@@ -1,7 +1,6 @@
 <?php
 
 // Set headers for CORS (Cross-Origin Resource Sharing)
-// This allows your React Native app (running on a different origin) to access the API.
 header("Access-Control-Allow-Origin: *");
 header("Content-Type: application/json; charset=UTF-8");
 header("Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS");
@@ -65,14 +64,37 @@ function fetchItemWithHierarchy($pdo, $id) {
 
 // Helper function to get properties for a given template_id
 function getTemplateProperties($pdo, $template_id) {
-    $stmt = $pdo->prepare("SELECT property_name FROM template_properties WHERE template_id = ? ORDER BY property_name ASC");
+    $stmt = $pdo->prepare("SELECT id, property_name FROM template_properties WHERE template_id = ? ORDER BY property_name ASC");
     $stmt->execute([$template_id]);
     // Fetch all property names and return them as an array of objects
-    // where each object has a 'name' key, matching the client-side expectation.
-    return array_map(function($row) {
-        return ['name' => $row['property_name']];
-    }, $stmt->fetchAll());
+    return $stmt->fetchAll(); // Return id and property_name
 }
+
+// Helper function to update template properties
+function updateTemplateProperties($pdo, $template_id, $properties) {
+    // Start a transaction to ensure atomicity
+    $pdo->beginTransaction();
+    try {
+        // First, delete existing properties for the template
+        $stmt_delete = $pdo->prepare("DELETE FROM template_properties WHERE template_id = ?");
+        $stmt_delete->execute([$template_id]);
+
+        // Then, insert the new/updated properties
+        $stmt_insert = $pdo->prepare("INSERT INTO template_properties (template_id, property_name) VALUES (?, ?)");
+        foreach ($properties as $prop) {
+            if (isset($prop['property_name']) && !empty($prop['property_name'])) {
+                $stmt_insert->execute([$template_id, $prop['property_name']]);
+            }
+        }
+        $pdo->commit();
+        return true;
+    } catch (\PDOException $e) {
+        $pdo->rollBack();
+        error_log("Failed to update template properties: " . $e->getMessage());
+        return false;
+    }
+}
+
 
 // Get the requested entity and method
 $entity = $_GET['entity'] ?? '';
@@ -294,7 +316,71 @@ switch ($entity) {
                     echo json_encode($templates);
                 }
                 break;
-            // You can add POST, PUT, DELETE methods here if you want API control over templates
+
+            case 'POST': // Allow creating new templates
+                if (!isset($input['name'])) {
+                    http_response_code(400);
+                    echo json_encode(["message" => "Missing 'name' for new template."]);
+                    break;
+                }
+                $description = $input['description'] ?? null;
+                $stmt = $pdo->prepare("INSERT INTO templates (name, description) VALUES (?, ?)");
+                if ($stmt->execute([$input['name'], $description])) {
+                    $new_id = $pdo->lastInsertId();
+                    // Add template properties if provided
+                    if (isset($input['properties']) && is_array($input['properties'])) {
+                        updateTemplateProperties($pdo, $new_id, $input['properties']);
+                    }
+                    http_response_code(201); // Created
+                    echo json_encode(["message" => "Template created successfully.", "id" => $new_id]);
+                } else {
+                    http_response_code(500);
+                    echo json_encode(["message" => "Failed to create template."]);
+                }
+                break;
+
+            case 'PUT': // Allow updating existing templates
+                if (!$id) {
+                    http_response_code(400);
+                    echo json_encode(["message" => "Missing 'id' for template update."]);
+                    break;
+                }
+                if (!isset($input['name'])) {
+                    http_response_code(400);
+                    echo json_encode(["message" => "Missing 'name' for template update."]);
+                    break;
+                }
+                $description = $input['description'] ?? null;
+                $stmt = $pdo->prepare("UPDATE templates SET name = ?, description = ? WHERE id = ?");
+                if ($stmt->execute([$input['name'], $description, $id])) {
+                    // Update template properties if provided
+                    if (isset($input['properties']) && is_array($input['properties'])) {
+                        updateTemplateProperties($pdo, $id, $input['properties']);
+                    }
+                    http_response_code(200);
+                    echo json_encode(["message" => "Template updated successfully."]);
+                } else {
+                    http_response_code(500);
+                    echo json_encode(["message" => "Failed to update template."]);
+                }
+                break;
+
+            case 'DELETE': // Allow deleting templates
+                if (!$id) {
+                    http_response_code(400);
+                    echo json_encode(["message" => "Missing 'id' for template deletion."]);
+                    break;
+                }
+                $stmt = $pdo->prepare("DELETE FROM templates WHERE id = ?");
+                if ($stmt->execute([$id])) {
+                    http_response_code(200);
+                    echo json_encode(["message" => "Template deleted successfully."]);
+                } else {
+                    http_response_code(500);
+                    echo json_encode(["message" => "Failed to delete template."]);
+                }
+                break;
+
             default:
                 http_response_code(405); // Method Not Allowed
                 echo json_encode(["message" => "Method not allowed for templates entity."]);
@@ -302,8 +388,6 @@ switch ($entity) {
         }
         break;
 
-    // We do not need a separate case for 'template_properties' entity in the main switch,
-    // as it's handled as a helper function by 'templates' GET requests.
     default:
         http_response_code(400); // Bad Request
         echo json_encode(["message" => "Invalid entity specified. Use 'objects', 'properties', or 'templates'."]);
