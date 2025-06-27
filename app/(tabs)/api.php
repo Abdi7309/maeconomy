@@ -34,6 +34,40 @@ try {
     exit();
 }
 
+// --- User Management Functions ---
+function registerUser($pdo, $username, $password) {
+    // Check if user already exists
+    $stmt = $pdo->prepare("SELECT id FROM users WHERE username = ?");
+    $stmt->execute([$username]);
+    if ($stmt->fetch()) {
+        return ["success" => false, "message" => "Username already exists."];
+    }
+
+    // Hash the password for security
+    $hashed_password = password_hash($password, PASSWORD_DEFAULT);
+
+    $stmt = $pdo->prepare("INSERT INTO users (username, password) VALUES (?, ?)");
+    if ($stmt->execute([$username, $hashed_password])) {
+        return ["success" => true, "message" => "User registered successfully."];
+    } else {
+        return ["success" => false, "message" => "Failed to register user."];
+    }
+}
+
+function loginUser($pdo, $username, $password) {
+    $stmt = $pdo->prepare("SELECT id, username, password FROM users WHERE username = ?");
+    $stmt->execute([$username]);
+    $user = $stmt->fetch();
+
+    if ($user && password_verify($password, $user['password'])) {
+        // In a real app, you would generate a session token or JWT here
+        return ["success" => true, "message" => "Login successful.", "user" => ["id" => $user['id'], "username" => $user['username']]];
+    } else {
+        return ["success" => false, "message" => "Invalid username or password."];
+    }
+}
+
+
 // Function to fetch an object and its children/properties recursively
 function fetchItemWithHierarchy($pdo, $id) {
     $stmt = $pdo->prepare("SELECT id, parent_id, naam, created_at, updated_at FROM objects WHERE id = ?");
@@ -98,6 +132,7 @@ function updateTemplateProperties($pdo, $template_id, $properties) {
 
 // Get the requested entity and method
 $entity = $_GET['entity'] ?? '';
+$action = $_GET['action'] ?? ''; // New 'action' parameter for users
 $method = $_SERVER['REQUEST_METHOD'];
 $id = $_GET['id'] ?? null; // For specific item operations
 $object_id = $_GET['object_id'] ?? null; // For properties related to an object
@@ -106,6 +141,44 @@ $object_id = $_GET['object_id'] ?? null; // For properties related to an object
 $input = json_decode(file_get_contents('php://input'), true);
 
 switch ($entity) {
+    case 'users':
+        if ($method !== 'POST') {
+            http_response_code(405);
+            echo json_encode(["message" => "Method not allowed for users entity. Use POST."]);
+            break;
+        }
+        if (!isset($input['username']) || !isset($input['password'])) {
+            http_response_code(400);
+            echo json_encode(["message" => "Missing username or password."]);
+            break;
+        }
+
+        switch ($action) {
+            case 'register':
+                $result = registerUser($pdo, $input['username'], $input['password']);
+                if ($result['success']) {
+                    http_response_code(201);
+                } else {
+                    http_response_code(409); // Conflict
+                }
+                echo json_encode($result);
+                break;
+            case 'login':
+                $result = loginUser($pdo, $input['username'], $input['password']);
+                if ($result['success']) {
+                    http_response_code(200);
+                } else {
+                    http_response_code(401); // Unauthorized
+                }
+                echo json_encode($result);
+                break;
+            default:
+                http_response_code(400);
+                echo json_encode(["message" => "Invalid action for users entity. Use 'register' or 'login'."]);
+                break;
+        }
+        break;
+
     case 'objects':
         switch ($method) {
             case 'GET':
@@ -390,7 +463,7 @@ switch ($entity) {
 
     default:
         http_response_code(400); // Bad Request
-        echo json_encode(["message" => "Invalid entity specified. Use 'objects', 'properties', or 'templates'."]);
+        echo json_encode(["message" => "Invalid entity specified. Use 'objects', 'properties', 'templates', or 'users'."]);
         break;
 }
 

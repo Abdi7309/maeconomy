@@ -5,6 +5,7 @@ const IS_DESKTOP = width >= 768; // Define your breakpoint for responsive behavi
 
 export const colors = {
     // New White Theme Colors
+    blue100: '#DBEAFE', // Light blue for selected states
     blue600: '#2563eb',
     blue700: '#1d4ed8',
     purple600: '#9333ea',
@@ -23,6 +24,7 @@ export const colors = {
     white: '#ffffff',
     black: '#000000',
     red500: '#EF4444', // Example for error states if needed
+    red600: '#DC2626',
 };
 
 export const shadows = {
@@ -117,7 +119,7 @@ const AppStyles = StyleSheet.create({
     headerBackButton: {
         padding: 0.5 * 16,
         marginLeft: -0.5 * 16,
-        marginRight: -0.5 * 16,
+        marginRight: 0.5 * 16, // Adjusted for spacing
         borderRadius: 9999,
     },
     headerPlaceholder: {
@@ -431,6 +433,55 @@ const AppStyles = StyleSheet.create({
         borderWidth: 2,
         borderColor: colors.blue600, // Blue border
     },
+    // Auth Screen Styles
+    authContainer: {
+        flexGrow: 1,
+        justifyContent: 'center',
+        paddingHorizontal: 2 * 16,
+        backgroundColor: colors.lightGray50,
+    },
+    authTitle: {
+        fontSize: 2.25 * 16, // 36px
+        fontWeight: 'bold',
+        color: colors.lightGray800,
+        textAlign: 'center',
+        marginBottom: 0.5 * 16, // 8px
+    },
+    authSubtitle: {
+        fontSize: 1.125 * 16, // 18px
+        color: colors.lightGray500,
+        textAlign: 'center',
+        marginBottom: 3 * 16, // 48px
+    },
+    authInputContainer: {
+        position: 'relative',
+        justifyContent: 'center',
+    },
+    authInputIcon: {
+        position: 'absolute',
+        left: 12,
+        zIndex: 1,
+    },
+    authInput: {
+        paddingLeft: 40, // Space for the icon
+    },
+    authSwitchContainer: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        marginTop: 1.5 * 16, // 24px
+    },
+    authSwitchText: {
+        color: colors.lightGray600,
+        fontSize: 1 * 16,
+    },
+    authSwitchButton: {
+        marginLeft: 4,
+    },
+    authSwitchButtonText: {
+        color: colors.blue600,
+        fontWeight: 'bold',
+        fontSize: 1 * 16,
+    },
     // Modal Styles
     modalBackdrop: {
         flex: 1,
@@ -536,21 +587,29 @@ const AppStyles = StyleSheet.create({
         marginTop: 8,
         marginBottom: 8,
         minHeight: 32,
-        height: 48, // Make it a bit taller for iOS
+        height: 48,
         justifyContent: 'center',
         backgroundColor: colors.white,
-        borderWidth: 1.5, // Always 1.5 for visibility
+        borderWidth: 1.5,
         borderColor: colors.lightGray300,
         borderRadius: 8,
-        paddingHorizontal: 8, // Add horizontal padding so border is visible
-        overflow: 'hidden', // Prevent Picker from overflowing border
+        paddingHorizontal: 8,
+        overflow: 'hidden',
         ...(Platform.OS === 'ios' && {
             shadowColor: '#000',
             shadowOffset: { width: 0, height: 1 },
             shadowOpacity: 0.08,
             shadowRadius: 2,
         }),
+        ...(Platform.OS === 'web' && {
+            borderWidth: 0,
+            borderColor: 'transparent',
+            boxShadow: 'none',
+        }),
     },
+    pickerItem: {
+        // iOS only: style for individual picker items
+    }
 });
 
 export default AppStyles;
