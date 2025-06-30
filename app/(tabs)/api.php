@@ -1,4 +1,8 @@
 <?php
+// Enable error reporting for development
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
 
 // Set headers for CORS (Cross-Origin Resource Sharing)
 header("Access-Control-Allow-Origin: *");
@@ -98,34 +102,36 @@ function fetchItemWithHierarchy($pdo, $id) {
 
 // Helper function to get properties for a given template_id
 function getTemplateProperties($pdo, $template_id) {
-    $stmt = $pdo->prepare("SELECT id, property_name FROM template_properties WHERE template_id = ? ORDER BY property_name ASC");
+    // Select the new column 'property_value'
+    $stmt = $pdo->prepare("SELECT id, property_name, property_value FROM template_properties WHERE template_id = ? ORDER BY property_name ASC");
     $stmt->execute([$template_id]);
-    // Fetch all property names and return them as an array of objects
-    return $stmt->fetchAll(); // Return id and property_name
+    return $stmt->fetchAll();
 }
 
 // Helper function to update template properties
 function updateTemplateProperties($pdo, $template_id, $properties) {
-    // Start a transaction to ensure atomicity
-    $pdo->beginTransaction();
+    // Check for duplicate property_name in $properties
+    $names = array_map(function($p) { return $p['property_name']; }, $properties);
+    if (count($names) !== count(array_unique($names))) {
+        throw new Exception("Dubbele eigenschap namen zijn niet toegestaan in één sjabloon.");
+    }
     try {
         // First, delete existing properties for the template
         $stmt_delete = $pdo->prepare("DELETE FROM template_properties WHERE template_id = ?");
         $stmt_delete->execute([$template_id]);
 
         // Then, insert the new/updated properties
-        $stmt_insert = $pdo->prepare("INSERT INTO template_properties (template_id, property_name) VALUES (?, ?)");
+        $stmt_insert = $pdo->prepare("INSERT INTO template_properties (template_id, property_name, property_value) VALUES (?, ?, ?)");
         foreach ($properties as $prop) {
             if (isset($prop['property_name']) && !empty($prop['property_name'])) {
-                $stmt_insert->execute([$template_id, $prop['property_name']]);
+                $property_value = $prop['property_value'] ?? '';
+                $stmt_insert->execute([$template_id, $prop['property_name'], $property_value]);
             }
         }
-        $pdo->commit();
         return true;
     } catch (\PDOException $e) {
-        $pdo->rollBack();
         error_log("Failed to update template properties: " . $e->getMessage());
-        return false;
+        throw $e;
     }
 }
 
@@ -363,7 +369,7 @@ switch ($entity) {
         }
         break;
 
-    case 'templates': // New case for handling templates
+    case 'templates':
         switch ($method) {
             case 'GET':
                 if ($id) {
@@ -390,25 +396,58 @@ switch ($entity) {
                 }
                 break;
 
-            case 'POST': // Allow creating new templates
-                if (!isset($input['name'])) {
+            case 'POST':
+                // Log incoming data for debugging
+                error_log("Template POST input: " . json_encode($input));
+                
+                if (!isset($input['name']) || empty(trim($input['name']))) {
                     http_response_code(400);
-                    echo json_encode(["message" => "Missing 'name' for new template."]);
+                    echo json_encode(["message" => "Missing or empty 'name' for new template."]);
                     break;
                 }
+                
                 $description = $input['description'] ?? null;
-                $stmt = $pdo->prepare("INSERT INTO templates (name, description) VALUES (?, ?)");
-                if ($stmt->execute([$input['name'], $description])) {
-                    $new_id = $pdo->lastInsertId();
-                    // Add template properties if provided
-                    if (isset($input['properties']) && is_array($input['properties'])) {
-                        updateTemplateProperties($pdo, $new_id, $input['properties']);
+                
+                // Start transaction for template and properties
+                $pdo->beginTransaction();
+                error_log("Begin transaction");
+                try {
+                    // Insert template
+                    $stmt = $pdo->prepare("INSERT INTO templates (name, description) VALUES (?, ?)");
+                    if (!$stmt->execute([trim($input['name']), $description])) {
+                        throw new Exception("Failed to insert template");
                     }
-                    http_response_code(201); // Created
-                    echo json_encode(["message" => "Template created successfully.", "id" => $new_id]);
-                } else {
+                    
+                    $new_id = $pdo->lastInsertId();
+                    
+                    // Add template properties if provided
+                    if (isset($input['properties']) && is_array($input['properties']) && !empty($input['properties'])) {
+                        // Filter out empty properties
+                        $validProperties = array_filter($input['properties'], function($prop) {
+                            // Controleer of zowel property_name bestaat en niet leeg is
+                            return isset($prop['property_name']) && !empty(trim($prop['property_name']));
+                        });
+
+                        if (!empty($validProperties)) {
+                            // $validProperties bevat ook 'property_value' indien aanwezig
+                            updateTemplateProperties($pdo, $new_id, $validProperties);
+                        }
+                    }
+                    
+                    $pdo->commit();
+                    error_log("Commit transaction");
+                    http_response_code(201);
+                    echo json_encode([
+                        "message" => "Template created successfully.", 
+                        "id" => $new_id,
+                        "properties_count" => count($input['properties'] ?? [])
+                    ]);
+                    
+                } catch (Exception $e) {
+                    $pdo->rollBack();
+                    error_log("Template creation failed: " . $e->getMessage());
                     http_response_code(500);
-                    echo json_encode(["message" => "Failed to create template."]);
+                    echo json_encode(["message" => "Failed to create template: " . $e->getMessage()]);
                 }
                 break;
 
@@ -423,18 +462,31 @@ switch ($entity) {
                     echo json_encode(["message" => "Missing 'name' for template update."]);
                     break;
                 }
+                
                 $description = $input['description'] ?? null;
-                $stmt = $pdo->prepare("UPDATE templates SET name = ?, description = ? WHERE id = ?");
-                if ($stmt->execute([$input['name'], $description, $id])) {
+                
+                $pdo->beginTransaction();
+                try {
+                    $stmt = $pdo->prepare("UPDATE templates SET name = ?, description = ? WHERE id = ?");
+                    if (!$stmt->execute([$input['name'], $description, $id])) {
+                        throw new Exception("Failed to update template");
+                    }
+                    
                     // Update template properties if provided
                     if (isset($input['properties']) && is_array($input['properties'])) {
+                        // $input['properties'] bevat ook 'property_value' indien aanwezig
                         updateTemplateProperties($pdo, $id, $input['properties']);
                     }
+                    
+                    $pdo->commit();
                     http_response_code(200);
                     echo json_encode(["message" => "Template updated successfully."]);
-                } else {
+                    
+                } catch (Exception $e) {
+                    $pdo->rollBack();
+                    error_log("Template update failed: " . $e->getMessage());
                     http_response_code(500);
-                    echo json_encode(["message" => "Failed to update template."]);
+                    echo json_encode(["message" => "Failed to update template: " . $e->getMessage()]);
                 }
                 break;
 
@@ -444,13 +496,28 @@ switch ($entity) {
                     echo json_encode(["message" => "Missing 'id' for template deletion."]);
                     break;
                 }
-                $stmt = $pdo->prepare("DELETE FROM templates WHERE id = ?");
-                if ($stmt->execute([$id])) {
+                
+                $pdo->beginTransaction();
+                try {
+                    // First delete template properties
+                    $stmt_props = $pdo->prepare("DELETE FROM template_properties WHERE template_id = ?");
+                    $stmt_props->execute([$id]);
+                    
+                    // Then delete template
+                    $stmt = $pdo->prepare("DELETE FROM templates WHERE id = ?");
+                    if (!$stmt->execute([$id])) {
+                        throw new Exception("Failed to delete template");
+                    }
+                    
+                    $pdo->commit();
                     http_response_code(200);
                     echo json_encode(["message" => "Template deleted successfully."]);
-                } else {
+                    
+                } catch (Exception $e) {
+                    $pdo->rollBack();
+                    error_log("Template deletion failed: " . $e->getMessage());
                     http_response_code(500);
-                    echo json_encode(["message" => "Failed to delete template."]);
+                    echo json_encode(["message" => "Failed to delete template: " . $e->getMessage()]);
                 }
                 break;
 

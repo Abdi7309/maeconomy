@@ -1,14 +1,14 @@
 import { Picker } from '@react-native-picker/picker';
-import { Box, ChevronLeft, ChevronRight, FileText, KeyRound, Paintbrush, Palette, Plus, Ruler, Tag, Wrench, X, LogOut, User, Lock } from 'lucide-react-native';
+import { Box, ChevronLeft, ChevronRight, FileText, KeyRound, Paintbrush, Palette, Plus, Ruler, Tag, Wrench, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { Alert, Dimensions, KeyboardAvoidingView, Modal, Platform, RefreshControl, ScrollView, StatusBar, Text, TextInput, TouchableOpacity, View, ActivityIndicator } from 'react-native';
+import { Alert, Dimensions, KeyboardAvoidingView, Modal, Platform, RefreshControl, ScrollView, StatusBar, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import AppStyles, { colors } from './AppStyles';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-
 
 // Re-integrating AppStyles and colors directly into this file
 const { width } = Dimensions.get('window');
 const IS_DESKTOP = width >= 768; // Define your breakpoint for responsive behavior
+
+// REMOVE lines 32-540 (shadows and AppStyles definition)
 
 // Use a single default icon since it's no longer stored per property
 const DEFAULT_PROPERTY_ICON = 'Tag'; // You can change this to any icon key from IconMap
@@ -16,103 +16,21 @@ const DEFAULT_PROPERTY_ICON = 'Tag'; // You can change this to any icon key from
 const IconMap = { Palette, Ruler, Box, Wrench, Tag, KeyRound, FileText, Paintbrush };
 
 const App = () => {
-    const [userToken, setUserToken] = useState(null);
-    const [isLoading, setIsLoading] = useState(true);
-    const [authScreen, setAuthScreen] = useState('login'); // 'login' or 'register'
-    const [authError, setAuthError] = useState(''); // New state for auth error text
-
     const [currentScreen, setCurrentScreen] = useState('objects');
     const [selectedProperty, setSelectedProperty] = useState(null);
     const [showAddObjectModal, setShowAddObjectModal] = useState(false);
-    const [showAddTemplateModal, setShowAddTemplateModal] = useState(false);
+    // New state for showing the Add Template modal
+    const [showAddTemplateModal, setShowAddTemplateModal] = useState(false); // <--- NEW STATE
     const [currentPath, setCurrentPath] = useState([]);
     const [objectsHierarchy, setObjectsHierarchy] = useState([]);
     const [refreshing, setRefreshing] = useState(false);
-    const [fetchedTemplates, setFetchedTemplates] = useState({});
+    // New state for fetched templates
+    const [fetchedTemplates, setFetchedTemplates] = useState({}); // Changed to an object for direct lookup by name
 
-
-    const API_BASE_URL = 'https://ce13-84-243-252-3.ngrok-free.app/Maeconomy/app/(tabs)/api.php';
-
-    // --- Authentication Functions ---
-    useEffect(() => {
-        // Check for a stored token on app startup
-        const bootstrapAsync = async () => {
-            let token;
-            try {
-                token = await AsyncStorage.getItem('userToken');
-            } catch (e) {
-                console.error("Restoring token failed", e);
-            }
-            setUserToken(token);
-            setIsLoading(false);
-        };
-
-        bootstrapAsync();
-    }, []);
-
-    const handleLogin = async (username, password) => {
-        try {
-            const response = await fetch(`${API_BASE_URL}?entity=users&action=login`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, password }),
-            });
-            const result = await response.json();
-            if (response.ok && result.success) {
-                const token = JSON.stringify(result.user); // Store user object as token
-                await AsyncStorage.setItem('userToken', token);
-                setAuthError(''); // Clear any previous errors
-                setUserToken(token);
-            } else {
-                // Set the error message to be displayed as text
-                setAuthError(result.message || 'An error occurred.');
-            }
-        } catch (error) {
-            console.error('Login error:', error);
-            setAuthError('An unexpected network error occurred.');
-        }
-    };
-
-    const handleRegister = async (username, password) => {
-        try {
-            const response = await fetch(`${API_BASE_URL}?entity=users&action=register`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, password }),
-            });
-            const result = await response.json();
-            if (response.ok && result.success) {
-                // On success, clear errors and switch to login screen without a popup
-                setAuthError('');
-                setAuthScreen('login');
-            } else {
-                // Set the error message to be displayed as text
-                setAuthError(result.message || 'An error occurred.');
-            }
-        } catch (error) {
-            console.error('Registration error:', error);
-            setAuthError('An unexpected network error occurred.');
-        }
-    };
-
-    const handleLogout = async () => {
-        await AsyncStorage.removeItem('userToken');
-        setUserToken(null);
-        // Reset app state on logout
-        setCurrentScreen('objects');
-        setCurrentPath([]);
-        setObjectsHierarchy([]);
-    };
-
-    // --- Data Fetching ---
-    useEffect(() => {
-        // Only fetch data if user is logged in
-        if (userToken) {
-            fetchAndSetAllObjects();
-            fetchTemplates();
-        }
-    }, [userToken]); // Re-run when userToken changes
-
+    // IMPORTANT: Replace with your actual API base URL.
+    // Ensure your device running the app can reach this IP address.
+    // For local development, this usually means your computer's local IP.
+    const API_BASE_URL = 'https://ef79-84-243-252-3.ngrok-free.app/Maeconomy/app/(tabs)/api.php';
 
     // Helper to find an item by path (e.g., [1, 101] finds item with id 101 inside item with id 1)
     const findItemByPath = (data, path) => {
@@ -176,7 +94,10 @@ const App = () => {
 
         } catch (error) {
             console.error('Failed to fetch and set all objects (overall error):', error);
-            Alert.alert('Data Error', 'Failed to load data. Please check your network connection and API.');
+            Alert.alert(
+                'Error',
+                'Failed to load data. Please check your network connection and ensure the PHP API is running correctly and accessible.'
+            );
         } finally {
             if (isRefreshing) {
                 setRefreshing(false);
@@ -217,7 +138,10 @@ const App = () => {
             setFetchedTemplates(formattedTemplates);
         } catch (error) {
             console.error('Failed to fetch templates:', error);
-            Alert.alert('Template Error', 'Failed to load templates. Please check your network connection and API.');
+            Alert.alert(
+                'Error',
+                'Failed to load templates. Please check your network connection and API.'
+            );
         }
     };
 
@@ -227,6 +151,12 @@ const App = () => {
         fetchAndSetAllObjects(true);
         fetchTemplates(); // Also refresh templates on pull-to-refresh
     };
+
+    // Initial fetch for top-level objects and templates when component mounts
+    useEffect(() => {
+        fetchAndSetAllObjects();
+        fetchTemplates(); // Fetch templates on initial mount
+    }, []); // Empty dependency array means this runs once on component mount
 
     const handleAddObject = async (parentPath, newObject) => {
         try {
@@ -238,7 +168,7 @@ const App = () => {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    name: newObject.name,
+                    name: newObject.name, // Use 'name' as expected by PHP API's POST endpoint
                     parent_id: parentId,
                 }),
             });
@@ -246,8 +176,9 @@ const App = () => {
             const result = await response.json();
 
             if (response.ok) {
-                await fetchAndSetAllObjects();
                 Alert.alert('Success', result.message);
+                // After adding, re-fetch the entire hierarchy to ensure UI updates
+                await fetchAndSetAllObjects();
             } else {
                 Alert.alert('Error', result.message || 'Failed to add object.');
             }
@@ -298,14 +229,16 @@ const App = () => {
             <View style={AppStyles.screen}>
                 <View style={AppStyles.header}>
                     <View style={AppStyles.headerFlex}>
-                        {/* The ScrollView will now take up the available space, pushing the logout button to the right */}
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1, marginRight: 16 }}>
+                        {/* No back button here as per user request */}
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 1 }}>
                             {breadcrumbs.map((crumb, index) => (
                                 <View key={crumb.id} style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                    {/* Don't show chevron for the first breadcrumb or if it's the only one */}
                                     {index > 0 && (
                                         <ChevronRight color={colors.lightGray700} size={16} style={{ marginHorizontal: 4 }} />
                                     )}
                                     <TouchableOpacity
+                                        // Only make the crumb clickable if it's not the current active one
                                         onPress={() => {
                                             if (index !== breadcrumbs.length - 1) {
                                                 setCurrentPath(crumb.path);
@@ -315,7 +248,8 @@ const App = () => {
                                         }}
                                     >
                                         <Text style={[
-                                            AppStyles.headerTitleSmall,
+                                            AppStyles.headerTitleSmall, // Applying the new smaller, left-aligned style
+                                            // Always use lightGray900 for color, make bold only for the active crumb
                                             { color: colors.lightGray900 },
                                             index === breadcrumbs.length - 1 && { fontWeight: 'bold' }
                                         ]}>
@@ -325,11 +259,7 @@ const App = () => {
                                 </View>
                             ))}
                         </ScrollView>
-                        
-                        {/* Logout Button on the right */}
-                        <TouchableOpacity onPress={handleLogout} style={AppStyles.headerBackButton}>
-                            <LogOut color={colors.red600} size={24} />
-                        </TouchableOpacity>
+                        {/* Placeholder is also removed as there is no back button to balance */}
                     </View>
                 </View>
                 <ScrollView
@@ -338,10 +268,10 @@ const App = () => {
                         <RefreshControl
                             refreshing={refreshing}
                             onRefresh={onRefresh}
-                            colors={[colors.blue600]}
-                            tintColor={colors.blue600}
-                            title="Vernieuwen..."
-                            titleColor={colors.lightGray600}
+                            colors={[colors.blue600]} // Android
+                            tintColor={colors.blue600} // iOS
+                            title="Vernieuwen..." // iOS
+                            titleColor={colors.lightGray600} // iOS
                         />
                     }
                 >
@@ -349,7 +279,7 @@ const App = () => {
                         {items.length > 0 ? (
                             items.map((item) => (
                                 <TouchableOpacity
-                                    key={item.id}
+                                    key={item.id} // Key is essential for React list rendering
                                     style={AppStyles.card}
                                     onPress={() => {
                                         setSelectedProperty(null);
@@ -362,6 +292,7 @@ const App = () => {
                                             <Text style={AppStyles.cardTitle}>{item.naam}</Text>
                                             <Text style={AppStyles.cardSubtitle}>
                                                 {(item.properties || []).length} eigenschap{(item.properties || []).length !== 1 ? 'pen' : ''}
+                                                {/* children.length is now accurate as the hierarchy is fully loaded */}
                                                 {(item.children || []).length > 0 ? ` - ${(item.children || []).length} sub-item(s)` : ''}
                                             </Text>
                                         </View>
@@ -390,10 +321,12 @@ const App = () => {
         );
     };
 
+    // Update the property item rendering in PropertiesScreen
     const PropertiesScreen = ({ currentPath }) => {
         const item = findItemByPath(objectsHierarchy, currentPath);
         if (!item) return null;
 
+        // Always render the default icon
         const renderIcon = (customColor = colors.lightGray500) => {
             const Icon = IconMap[DEFAULT_PROPERTY_ICON] || Tag;
             return <Icon color={customColor} size={20} />;
@@ -422,10 +355,10 @@ const App = () => {
                         <RefreshControl
                             refreshing={refreshing}
                             onRefresh={onRefresh}
-                            colors={[colors.blue600]}
-                            tintColor={colors.blue600}
-                            title="Vernieuwen..."
-                            titleColor={colors.lightGray600}
+                            colors={[colors.blue600]} // Android
+                            tintColor={colors.blue600} // iOS
+                            title="Vernieuwen..." // iOS
+                            titleColor={colors.lightGray600} // iOS
                         />
                     }
                 >
@@ -461,14 +394,17 @@ const App = () => {
 
         const [newPropertiesList, setNewPropertiesList] = useState([]);
         const [nextNewPropertyId, setNextNewPropertyId] = useState(0);
-        const [selectedTemplate, setSelectedTemplate] = useState(null);
+        const [selectedTemplate, setSelectedTemplate] = useState(null); // New state for selected template
 
+        // Effect to ensure there's always at least one empty field for input
         useEffect(() => {
+            // Only add an empty field if newPropertiesList.length is 0 AND no template is selected
             if (newPropertiesList.length === 0 && selectedTemplate === null) {
                 addNewPropertyField();
             }
-        }, [newPropertiesList, selectedTemplate]);
+        }, [newPropertiesList, selectedTemplate]); // Add selectedTemplate to dependencies
 
+        // Always render the default icon
         const renderIcon = (customColor = colors.lightGray500) => {
             const Icon = IconMap[DEFAULT_PROPERTY_ICON] || Tag;
             return <Icon color={customColor} size={20} />;
@@ -488,52 +424,75 @@ const App = () => {
 
         const handlePropertyFieldChange = (idToUpdate, field, value) => {
             setNewPropertiesList(prevList => {
-                return prevList.map(prop =>
+                const updatedList = prevList.map(prop =>
                     prop.id === idToUpdate ? { ...prop, [field]: value } : prop
                 );
+                return updatedList;
             });
         };
 
+        // Function to handle saving unsaved properties on back navigation
         const handleSaveOnBack = async () => {
-            const validPropertiesToSave = newPropertiesList.filter(prop => prop.name.trim() !== '' && prop.value.trim() !== '')
-                .map(prop => ({ name: prop.name.trim(), waarde: prop.value.trim() }));
+            const validPropertiesToSave = [];
+            newPropertiesList.forEach(prop => {
+                if (prop.name.trim() !== '' && prop.value.trim() !== '') {
+                    validPropertiesToSave.push({ name: prop.name.trim(), waarde: prop.value.trim() });
+                }
+            });
 
             if (validPropertiesToSave.length > 0) {
                 try {
                     for (const prop of validPropertiesToSave) {
-                        await fetch(`${API_BASE_URL}?entity=properties`, {
+                        const response = await fetch(`${API_BASE_URL}?entity=properties`, {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
                             body: JSON.stringify({
                                 object_id: item.id,
                                 name: prop.name,
                                 waarde: prop.waarde,
                             }),
                         });
+
+                        const result = await response.json();
+                        if (!response.ok) {
+                            console.error('Failed to add property:', result.message);
+                            // Optionally, break here or collect failed ones
+                        }
                     }
-                    await fetchAndSetAllObjects();
                     Alert.alert('Success', 'Eigenschappen succesvol toegevoegd!');
+                    // After adding, re-fetch the entire hierarchy to ensure UI updates
+                    await fetchAndSetAllObjects();
                 } catch (error) {
                     console.error('Error adding properties:', error);
                     Alert.alert('Error', 'Er is een onverwachte fout opgetreden bij het toevoegen van eigenschappen.');
                 }
+            } else {
+                // If no valid properties to save, just navigate back
+                console.log("No valid properties to save.");
             }
 
+            // Reset state and navigate back regardless of save success
             setNewPropertiesList([]);
             setNextNewPropertyId(0);
-            setSelectedTemplate(null);
+            setSelectedTemplate(null); // Reset selected template
             setCurrentScreen('properties');
         };
 
         return (
             <View style={[AppStyles.screen, { backgroundColor: colors.white }]}>
                 <KeyboardAvoidingView
-                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-                    style={{ flex: 1 }}
+                    behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                    style={{ flex: 1 }} // KAV now handles the entire screen content area below the status bar
                 >
+                    {/* Header is part of the content KeyboardAvoidingView manages */}
                     <View style={AppStyles.header}>
                         <View style={AppStyles.headerFlex}>
-                            <TouchableOpacity onPress={handleSaveOnBack} style={AppStyles.headerBackButton}>
+                            <TouchableOpacity
+                                onPress={handleSaveOnBack}
+                                style={AppStyles.headerBackButton}
+                            >
                                 <ChevronLeft color={colors.lightGray700} size={24} />
                             </TouchableOpacity>
                             <Text style={AppStyles.headerTitleLg}>Eigenschap Toevoegen</Text>
@@ -541,12 +500,14 @@ const App = () => {
                         </View>
                     </View>
 
+                    {/* Main content directly inside KeyboardAvoidingView, wrapped in a ScrollView for scrollability and padding */}
                     <ScrollView
-                        style={{ flex: 1 }}
-                        contentContainerStyle={AppStyles.contentPadding}
+                        style={{ flex: 1 }} // Allow ScrollView to take remaining vertical space
+                        contentContainerStyle={AppStyles.contentPadding} // Apply padding here
                         keyboardShouldPersistTaps="handled"
                         showsVerticalScrollIndicator={false}
                     >
+                        {/* Existing Properties Card */}
                         <View style={[AppStyles.card, { marginTop: 0, marginBottom: 1.5 * 16, padding: 1 * 16 }]}>
                             <Text style={[AppStyles.infoItemValue, { marginBottom: 1 * 16, fontSize: 1 * 16, fontWeight: '600' }]}>
                                 Bestaande Eigenschappen
@@ -570,35 +531,54 @@ const App = () => {
                             </View>
                         </View>
 
+                        {/* New Properties Card */}
                         <View style={[AppStyles.card, { marginBottom: 1.5 * 16, padding: 1 * 16 }]}>
                             <Text style={[AppStyles.infoItemValue, { marginBottom: 1 * 16, fontSize: 1 * 16, fontWeight: '600' }]}>
                                 Nieuwe Eigenschappen Toevoegen
                             </Text>
 
+                            {/* Template Selector */}
                             <View style={AppStyles.formGroup}>
                                 <Text style={AppStyles.formLabel}>Kies een sjabloon (optioneel)</Text>
-                                <View style={[AppStyles.pickerContainer, Platform.OS === 'android' && { backgroundColor: colors.white, borderWidth: 1, borderColor: colors.lightGray300, borderRadius: 8, minHeight: 48, justifyContent: 'center' }]}>
+                                <View style={[
+    AppStyles.pickerContainer,
+    Platform.OS === 'android' && {
+        backgroundColor: colors.white,
+        borderWidth: 1,
+        borderColor: colors.lightGray300,
+        borderRadius: 8,
+        minHeight: 48,
+        justifyContent: 'center',
+    }
+]}>
                                     <Picker
                                         selectedValue={selectedTemplate}
                                         onValueChange={(itemValue) => {
                                             setSelectedTemplate(itemValue);
-                                            if (itemValue && fetchedTemplates[itemValue]) {
+                                            if (itemValue && fetchedTemplates[itemValue]) { // Use fetchedTemplates
+                                                // When a template is selected, populate newPropertiesList
                                                 const templateProps = fetchedTemplates[itemValue].map((prop, index) => ({
-                                                    id: nextNewPropertyId + index,
+                                                    id: nextNewPropertyId + index, // Ensure unique IDs
                                                     name: prop.name,
                                                     value: ''
                                                 }));
                                                 setNewPropertiesList(templateProps);
+                                                // Ensure nextNewPropertyId is incremented by the number of template items
                                                 setNextNewPropertyId(prevId => prevId + templateProps.length);
                                             } else {
+                                                // Clear if "Geen sjabloon" or no template selected
                                                 setNewPropertiesList([]);
-                                                setNextNewPropertyId(0);
-                                                addNewPropertyField();
+                                                setNextNewPropertyId(0); // Reset ID counter
+                                                addNewPropertyField(); // Add an empty field if no template selected
                                             }
                                         }}
-                                        style={[AppStyles.formInput, { backgroundColor: 'transparent' }, Platform.OS === 'android' && { color: colors.lightGray700 }]}
+                                        style={[
+            AppStyles.formInput,
+            { backgroundColor: 'transparent' }, // <-- Force transparent background
+            Platform.OS === 'android' && { color: colors.lightGray700 }
+        ]}
                                         itemStyle={Platform.OS === 'ios' ? AppStyles.pickerItem : null}
-                                        dropdownIconColor={colors.lightGray600}
+                                        dropdownIconColor={colors.lightGray600} // Optional: for Android
                                     >
                                         <Picker.Item label="Geen sjabloon" value={null} />
                                         {Object.keys(fetchedTemplates).map((templateName) => (
@@ -608,9 +588,13 @@ const App = () => {
                                 </View>
                             </View>
 
+                            {/* Button to Add New Template --- NEW BUTTON HERE --- */}
                             <TouchableOpacity
-                                onPress={() => setShowAddTemplateModal(true)}
-                                style={[AppStyles.btnSecondary, { marginBottom: 1.5 * 16, alignSelf: 'center' }]}
+                                onPress={() => setShowAddTemplateModal(true)} // Open the new modal
+                                style={[
+                                    AppStyles.btnSecondary, // Re-using a secondary button style
+                                    { marginBottom: 1.5 * 16, alignSelf: 'center' }
+                                ]}
                             >
                                 <Text style={AppStyles.btnSecondaryText}>+ Nieuw sjabloon toevoegen</Text>
                             </TouchableOpacity>
@@ -629,6 +613,7 @@ const App = () => {
                                                 returnKeyType="next"
                                             />
                                         </View>
+
                                         <View style={[AppStyles.formGroupHalf, { marginLeft: 8 }]}>
                                             <Text style={AppStyles.formLabel}>Waarde</Text>
                                             <TextInput
@@ -641,6 +626,7 @@ const App = () => {
                                                 onSubmitEditing={addNewPropertyField}
                                             />
                                         </View>
+                                        {/* Show remove button only if there's more than one field OR if the current field has content */}
                                         {newPropertiesList.length > 1 || (newPropertiesList.length === 1 && (prop.name.trim() !== '' || prop.value.trim() !== '')) ? (
                                             <TouchableOpacity
                                                 onPress={() => removePropertyField(prop.id)}
@@ -653,15 +639,22 @@ const App = () => {
                                 </View>
                             ))}
 
+                            {/* Save Button */}
                             <TouchableOpacity
                                 onPress={handleSaveOnBack}
-                                style={[AppStyles.btnPrimary, AppStyles.btnFull, AppStyles.btnFlexCenter, { marginTop: 0.5 * 16 }]}
+                                style={[
+                                    AppStyles.btnPrimary,
+                                    AppStyles.btnFull,
+                                    AppStyles.btnFlexCenter,
+                                    { marginTop: 0.5 * 16 }
+                                ]}
                             >
                                 <Text style={AppStyles.btnPrimaryText}>Opslaan</Text>
                             </TouchableOpacity>
                         </View>
                     </ScrollView>
 
+                    {/* Add Property FAB */}
                     <TouchableOpacity
                         onPress={addNewPropertyField}
                         style={AppStyles.fab}
@@ -680,7 +673,7 @@ const App = () => {
             if (name.trim()) {
                 handleAddObject(currentPath, { name });
             } else {
-                Alert.alert("Input Required", "Please enter a name for the object.");
+                Alert.alert("Invoer vereist", "Vul alstublieft de naam in.");
             }
         };
 
@@ -727,6 +720,7 @@ const App = () => {
         );
     };
 
+    // Voeg deze component toe in je index.js of waar je AddTemplateModal gebruikt
     const AddTemplateModal = () => {
         const [templateName, setTemplateName] = useState('');
         const [templateProperties, setTemplateProperties] = useState([{ name: '', value: '' }]);
@@ -753,7 +747,9 @@ const App = () => {
                 setError('Geef het sjabloon een naam.');
                 return;
             }
-            const validProps = templateProperties.filter(p => p.name.trim());
+            const validProps = templateProperties.filter(
+                (p) => p.name.trim() // Alleen naam is verplicht, waarde mag leeg zijn
+            );
             if (validProps.length === 0) {
                 setError('Voeg minimaal één eigenschap toe.');
                 return;
@@ -762,16 +758,19 @@ const App = () => {
             try {
                 const response = await fetch(`${API_BASE_URL}?entity=templates`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
                     body: JSON.stringify({
                         name: templateName.trim(),
-                        properties: validProps.map(p => ({ property_name: p.name.trim() })),
+                        properties: validProps.map(p => ({ property_name: p.name.trim() })), // <-- DIT IS DE JUISTE MAPPING
                     }),
                 });
 
                 const result = await response.json();
 
                 if (response.ok) {
+                    // Optioneel: herlaad templates in je app
                     fetchTemplates && fetchTemplates();
                     setShowAddTemplateModal(false);
                 } else {
@@ -792,7 +791,14 @@ const App = () => {
                     behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
                     style={AppStyles.modalBackdrop}
                 >
-                    <View style={[AppStyles.modalContent, { maxWidth: IS_DESKTOP ? '70%' : '90%', width: IS_DESKTOP ? 700 : '90%' }]}>
+                    <View style={[
+    AppStyles.modalContent,
+    {
+        backgroundColor: 'white',
+        maxWidth: IS_DESKTOP ? '70%' : '90%', // <-- maak breder op desktop
+        width: IS_DESKTOP ? 700 : '90%',      // <-- optioneel: vaste px breedte op desktop
+    }
+]}>
                         <Text style={AppStyles.modalTitle}>Nieuw Sjabloon Toevoegen</Text>
 
                         <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.6 }}>
@@ -830,6 +836,7 @@ const App = () => {
                                     )}
                                 </View>
                             ))}
+                            {/* --- HIER DE KNOP TOEVOEGEN --- */}
                             <TouchableOpacity
                                 onPress={handleAddProperty}
                                 style={[AppStyles.btnSecondary, { alignSelf: 'flex-start', marginBottom: 12 }]}
@@ -861,148 +868,45 @@ const App = () => {
         );
     };
 
-    const AuthScreen = ({ error, setError }) => {
-        const [username, setUsername] = useState('');
-        const [password, setPassword] = useState('');
-        const [isSubmitting, setIsSubmitting] = useState(false);
-    
-        const handleSubmit = async () => {
-            if (!username || !password) {
-                setError('Please enter both username and password.');
-                return;
-            }
-            setIsSubmitting(true);
-            if (authScreen === 'login') {
-                await handleLogin(username, password);
-            } else {
-                await handleRegister(username, password);
-            }
-            setIsSubmitting(false);
-        };
 
-        const handleUsernameChange = (text) => {
-            if (error) setError('');
-            setUsername(text);
-        }
-
-        const handlePasswordChange = (text) => {
-            if (error) setError('');
-            setPassword(text);
-        }
-    
-        return (
-            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
-                <ScrollView contentContainerStyle={AppStyles.authContainer}>
-                    <Text style={AppStyles.authTitle}>
-                        {authScreen === 'login' ? 'Welcome Back' : 'Create Account'}
-                    </Text>
-                    <Text style={AppStyles.authSubtitle}>
-                        {authScreen === 'login' ? 'Sign in to continue' : 'Sign up to get started'}
-                    </Text>
-    
-                    <View style={AppStyles.formGroup}>
-                        <Text style={AppStyles.formLabel}>Username</Text>
-                        <View style={AppStyles.authInputContainer}>
-                            <User style={AppStyles.authInputIcon} color={colors.lightGray400} size={20}/>
-                            <TextInput
-                                placeholder="Enter your username"
-                                value={username}
-                                onChangeText={handleUsernameChange}
-                                style={[AppStyles.formInput, AppStyles.authInput]}
-                                placeholderTextColor={colors.lightGray400}
-                                autoCapitalize="none"
-                                returnKeyType="next"
-                            />
-                        </View>
-                    </View>
-                    <View style={AppStyles.formGroup}>
-                        <Text style={AppStyles.formLabel}>Password</Text>
-                         <View style={AppStyles.authInputContainer}>
-                            <Lock style={AppStyles.authInputIcon} color={colors.lightGray400} size={20}/>
-                            <TextInput
-                                placeholder="Enter your password"
-                                value={password}
-                                onChangeText={handlePasswordChange}
-                                style={[AppStyles.formInput, AppStyles.authInput]}
-                                placeholderTextColor={colors.lightGray400}
-                                secureTextEntry
-                                returnKeyType="done"
-                                onSubmitEditing={handleSubmit}
-                            />
-                        </View>
-                    </View>
-
-                    {error ? <Text style={AppStyles.authErrorText}>{error}</Text> : null}
-    
-                    <TouchableOpacity onPress={handleSubmit} style={[AppStyles.btnPrimary, AppStyles.btnFull, {marginTop: 16}]} disabled={isSubmitting}>
-                        {isSubmitting ? <ActivityIndicator color={colors.white} /> : <Text style={AppStyles.btnPrimaryText}>{authScreen === 'login' ? 'Login' : 'Register'}</Text>}
-                    </TouchableOpacity>
-    
-                    <View style={AppStyles.authSwitchContainer}>
-                         <Text style={AppStyles.authSwitchText}>{authScreen === 'login' ? "Don't have an account?" : "Already have an account?"}</Text>
-                        <TouchableOpacity 
-                            onPress={() => {
-                                setAuthScreen(authScreen === 'login' ? 'register' : 'login');
-                                setError('');
-                            }} 
-                            style={AppStyles.authSwitchButton}
-                        >
-                             <Text style={AppStyles.authSwitchButtonText}>{authScreen === 'login' ? 'Register' : 'Login'}</Text>
-                        </TouchableOpacity>
-                    </View>
-                </ScrollView>
-            </KeyboardAvoidingView>
-        );
-    };
-
+    // currentLevelItems now directly references the nested children from the fully loaded objectsHierarchy
     const currentLevelItems = currentPath.length === 0 ? objectsHierarchy : findItemByPath(objectsHierarchy, currentPath)?.children || [];
-
-    if (isLoading) {
-        return (
-            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.lightGray100 }}>
-                <ActivityIndicator size="large" color={colors.blue600} />
-            </View>
-        );
-    }
 
     return (
         <>
+            {/* Set status bar style for iOS */}
             <StatusBar
                 barStyle={Platform.OS === 'ios' ? 'dark-content' : 'dark-content'}
-                backgroundColor="white"
+                backgroundColor="white" // Set your desired background color
             />
             <View style={AppStyles.appContainer}>
-                {userToken == null ? (
-                    <AuthScreen error={authError} setError={setAuthError} />
-                ) : (
-                    (() => {
-                        switch (currentScreen) {
-                            case 'objects':
-                                return (
-                                    <HierarchicalObjectsScreen
-                                        key={objectsHierarchy.length}
-                                        items={currentLevelItems}
-                                        currentLevelPath={currentPath}
-                                    />
-                                );
-                            case 'properties':
-                                return <PropertiesScreen currentPath={currentPath.concat(selectedProperty)} />;
-                            case 'addProperty':
-                                return <AddPropertyScreen currentPath={currentPath.concat(selectedProperty)} />;
-                            default:
-                                return (
-                                    <HierarchicalObjectsScreen
-                                        key={objectsHierarchy.length}
-                                        items={currentLevelItems}
-                                        currentLevelPath={currentPath}
-                                    />
-                                );
-                        }
-                    })()
-                )}
-                {/* Render All Modals at the top level */}
-                {userToken && showAddObjectModal && <AddObjectModal />}
-                {userToken && showAddTemplateModal && <AddTemplateModal />}
+                {(() => {
+                    switch (currentScreen) {
+                        case 'objects':
+                            return (
+                                <HierarchicalObjectsScreen
+                                    key={objectsHierarchy.length} // Force remount when top-level hierarchy size changes
+                                    items={currentLevelItems}
+                                    currentLevelPath={currentPath}
+                                />
+                            );
+                        case 'properties':
+                            return <PropertiesScreen currentPath={currentPath.concat(selectedProperty)} />;
+                        case 'addProperty':
+                            return <AddPropertyScreen currentPath={currentPath.concat(selectedProperty)} />;
+                        default:
+                            return (
+                                <HierarchicalObjectsScreen
+                                    key={objectsHierarchy.length}
+                                    items={currentLevelItems}
+                                    currentLevelPath={currentPath}
+                                />
+                            );
+                    }
+                })()}
+                {showAddObjectModal && <AddObjectModal />}
+                {/* Render the new AddTemplateModal */}
+                {showAddTemplateModal && <AddTemplateModal />} {/* <--- NEW MODAL RENDER */}
             </View>
         </>
     );
