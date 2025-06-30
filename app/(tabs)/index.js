@@ -1,14 +1,26 @@
 import { Picker } from '@react-native-picker/picker';
-import { Box, ChevronLeft, ChevronRight, FileText, KeyRound, Paintbrush, Palette, Plus, Ruler, Tag, Wrench, X } from 'lucide-react-native';
+import { Box, ChevronDown, ChevronLeft, ChevronRight, FileText, KeyRound, Paintbrush, Palette, Plus, Ruler, Tag, Wrench, X } from 'lucide-react-native'; // Re-added ChevronDown
 import { useEffect, useState } from 'react';
-import { Alert, Dimensions, KeyboardAvoidingView, Modal, Platform, RefreshControl, ScrollView, StatusBar, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import AppStyles, { colors } from './AppStyles';
+import {
+    Alert,
+    Dimensions,
+    KeyboardAvoidingView,
+    Modal,
+    Platform,
+    RefreshControl,
+    ScrollView,
+    StatusBar,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
+} from 'react-native';
 
-// Re-integrating AppStyles and colors directly into this file
+// --- Import AppStyles, colors, and shadows from a separate file ---
+import AppStyles, { colors } from './AppStyles'; // Correct import path assuming AppStyles.js is in the same directory
+
 const { width } = Dimensions.get('window');
 const IS_DESKTOP = width >= 768; // Define your breakpoint for responsive behavior
-
-// REMOVE lines 32-540 (shadows and AppStyles definition)
 
 // Use a single default icon since it's no longer stored per property
 const DEFAULT_PROPERTY_ICON = 'Tag'; // You can change this to any icon key from IconMap
@@ -17,20 +29,19 @@ const IconMap = { Palette, Ruler, Box, Wrench, Tag, KeyRound, FileText, Paintbru
 
 const App = () => {
     const [currentScreen, setCurrentScreen] = useState('objects');
-    const [selectedProperty, setSelectedProperty] = useState(null);
+    const [selectedProperty, setSelectedProperty] = useState(null); // This holds the ID of the object whose properties we are viewing/adding
     const [showAddObjectModal, setShowAddObjectModal] = useState(false);
-    // New state for showing the Add Template modal
-    const [showAddTemplateModal, setShowAddTemplateModal] = useState(false); // <--- NEW STATE
+    const [showAddTemplateModal, setShowAddTemplateModal] = useState(false);
     const [currentPath, setCurrentPath] = useState([]);
     const [objectsHierarchy, setObjectsHierarchy] = useState([]);
     const [refreshing, setRefreshing] = useState(false);
-    // New state for fetched templates
-    const [fetchedTemplates, setFetchedTemplates] = useState({}); // Changed to an object for direct lookup by name
+    // New state for fetched templates, structured for direct lookup by ID (as string)
+    const [fetchedTemplates, setFetchedTemplates] = useState({});
 
     // IMPORTANT: Replace with your actual API base URL.
     // Ensure your device running the app can reach this IP address.
     // For local development, this usually means your computer's local IP.
-    const API_BASE_URL = 'https://ef79-84-243-252-3.ngrok-free.app/Maeconomy/app/(tabs)/api.php';
+    const API_BASE_URL = 'http://10.3.1.19/Maeconomy/app/(tabs)/api.php';
 
     // Helper to find an item by path (e.g., [1, 101] finds item with id 101 inside item with id 1)
     const findItemByPath = (data, path) => {
@@ -74,23 +85,33 @@ const App = () => {
             const topLevelObjects = await topLevelResponse.json();
 
             // 2. For each top-level object, recursively fetch its full hierarchy
-            const hydrationPromises = topLevelObjects.map(async (obj) => {
+            // Use Promise.allSettled to allow some fetches to fail without stopping others
+            const hydrationResults = await Promise.allSettled(topLevelObjects.map(async (obj) => {
                 try {
                     const fullObjectResponse = await fetch(`${API_BASE_URL}?entity=objects&id=${obj.id}`);
                     if (!fullObjectResponse.ok) {
-                        console.warn(`Failed to fetch full hierarchy for object ID ${obj.id}. Skipping. Status: ${fullObjectResponse.status}`);
+                        console.warn(`Failed to fetch full hierarchy for object ID ${obj.id}. Status: ${fullObjectResponse.status}`);
                         return null; // Return null for this object if fetching fails
                     }
-                    return await fullObjectResponse.json();
+                    const data = await fullObjectResponse.json();
+                    // Ensure the 'properties' and 'children' keys exist, even if empty
+                    return {
+                        ...data,
+                        properties: data.properties || [],
+                        children: data.children || []
+                    };
                 } catch (innerError) {
                     console.error(`Error fetching full hierarchy for object ID ${obj.id}:`, innerError);
                     return null; // Return null if any error occurs during fetch
                 }
-            });
+            }));
 
-            const fullyHydratedObjects = (await Promise.all(hydrationPromises)).filter(Boolean);
+            // Filter out rejected promises and null results
+            const fullyHydratedObjects = hydrationResults
+                .filter(result => result.status === 'fulfilled' && result.value !== null)
+                .map(result => result.value);
 
-            setObjectsHierarchy(fullyHydratedObjects.filter(Boolean)); // Ensure only valid objects are set
+            setObjectsHierarchy(fullyHydratedObjects);
 
         } catch (error) {
             console.error('Failed to fetch and set all objects (overall error):', error);
@@ -108,43 +129,42 @@ const App = () => {
     // Function to fetch templates from the API
     const fetchTemplates = async () => {
         try {
+            console.log('Fetching templates...');
             const response = await fetch(`${API_BASE_URL}?entity=templates`);
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status} for templates`);
             }
             const templatesData = await response.json();
-            // Format templates into an object where keys are template names
+
             const formattedTemplates = {};
-            // Use Promise.all to fetch all template properties concurrently
             await Promise.all(templatesData.map(async (template) => {
                 try {
                     const propertiesResponse = await fetch(`${API_BASE_URL}?entity=templates&id=${template.id}`);
                     if (!propertiesResponse.ok) {
-                        console.warn(`Failed to fetch properties for template ID ${template.id}. Skipping.`);
-                        return; // Skip this template if properties cannot be fetched
+                        console.warn(`Failed to fetch properties for template ID ${template.id}. Skipping. Status: ${propertiesResponse.status}`);
+                        return; // Skip this template if properties fetch fails
                     }
                     const templateWithProperties = await propertiesResponse.json();
-                    if (templateWithProperties && templateWithProperties.properties) {
-                        // Zet property_name om naar name
-                        formattedTemplates[template.name] = templateWithProperties.properties.map(prop => ({
+
+                    formattedTemplates[String(template.id)] = {
+                        name: template.name,
+                        properties: (templateWithProperties.properties || []).map(prop => ({
                             ...prop,
-                            name: prop.property_name // Voeg een 'name' veld toe voor frontend gebruik
-                        }));
-                    }
+                            name: prop.property_name, // Map to 'name' for consistency
+                            value: prop.property_value || '' // Map to 'value', default to empty string
+                        }))
+                    };
                 } catch (innerError) {
                     console.error(`Error fetching properties for template ID ${template.id}:`, innerError);
                 }
             }));
             setFetchedTemplates(formattedTemplates);
+            console.log('Fetched templates:', formattedTemplates);
         } catch (error) {
             console.error('Failed to fetch templates:', error);
-            Alert.alert(
-                'Error',
-                'Failed to load templates. Please check your network connection and API.'
-            );
+            // Alert.alert('Error', 'Failed to load templates.'); // Not showing alert for templates to avoid excessive popups
         }
     };
-
 
     // Handle pull-to-refresh
     const onRefresh = () => {
@@ -158,33 +178,37 @@ const App = () => {
         fetchTemplates(); // Fetch templates on initial mount
     }, []); // Empty dependency array means this runs once on component mount
 
-    const handleAddObject = async (parentPath, newObject) => {
-        try {
-            const parentId = parentPath.length > 0 ? parentPath[parentPath.length - 1] : null;
+    // Modified handleAddObject: Reverted to only adding the object, no template application here
+    const handleAddObject = async (parentPath, newObjectData) => {
+        const parentId = parentPath.length > 0 ? parentPath[parentPath.length - 1] : null;
+        const { name } = newObjectData; // Only extract name, templateId is not passed from AddObjectModal anymore
 
-            const response = await fetch(`${API_BASE_URL}?entity=objects`, {
+        try {
+            // Add the new object
+            const objectResponse = await fetch(`${API_BASE_URL}?entity=objects`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    name: newObject.name, // Use 'name' as expected by PHP API's POST endpoint
+                    name: name,
                     parent_id: parentId,
                 }),
             });
 
-            const result = await response.json();
+            const objectResult = await objectResponse.json();
 
-            if (response.ok) {
-                Alert.alert('Success', result.message);
-                // After adding, re-fetch the entire hierarchy to ensure UI updates
-                await fetchAndSetAllObjects();
-            } else {
-                Alert.alert('Error', result.message || 'Failed to add object.');
+            if (!objectResponse.ok) {
+                Alert.alert('Error', objectResult.message || 'Failed to add object.');
+                return;
             }
+
+            Alert.alert('Success', objectResult.message);
+            // After adding, re-fetch the entire hierarchy to ensure UI updates
+            await fetchAndSetAllObjects();
         } catch (error) {
             console.error('Error adding object:', error);
-            Alert.alert('Error', 'An unexpected error occurred while adding the object.');
+            Alert.alert('Error', 'An unexpected error occurred while adding the item.');
         } finally {
             setShowAddObjectModal(false);
         }
@@ -213,7 +237,7 @@ const App = () => {
                 if (item) {
                     breadcrumbs.push({
                         id: item.id,
-                        name: item.naam,
+                        name: item.naam, // Assuming 'naam' is the display name
                         path: currentLevelPath.slice(0, index + 1)
                     });
                     currentItems = item.children || [];
@@ -229,7 +253,7 @@ const App = () => {
             <View style={AppStyles.screen}>
                 <View style={AppStyles.header}>
                     <View style={AppStyles.headerFlex}>
-                        {/* No back button here as per user request */}
+                        {/* Breadcrumbs */}
                         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 1 }}>
                             {breadcrumbs.map((crumb, index) => (
                                 <View key={crumb.id} style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -249,7 +273,6 @@ const App = () => {
                                     >
                                         <Text style={[
                                             AppStyles.headerTitleSmall, // Applying the new smaller, left-aligned style
-                                            // Always use lightGray900 for color, make bold only for the active crumb
                                             { color: colors.lightGray900 },
                                             index === breadcrumbs.length - 1 && { fontWeight: 'bold' }
                                         ]}>
@@ -282,7 +305,7 @@ const App = () => {
                                     key={item.id} // Key is essential for React list rendering
                                     style={AppStyles.card}
                                     onPress={() => {
-                                        setSelectedProperty(null);
+                                        setSelectedProperty(null); // Clear selected property when navigating deeper
                                         setCurrentPath(currentLevelPath.concat(item.id));
                                         setCurrentScreen('objects');
                                     }}
@@ -297,8 +320,8 @@ const App = () => {
                                             </Text>
                                         </View>
                                         <PropertyButton onClick={(e) => {
-                                            e.stopPropagation();
-                                            setSelectedProperty(item.id);
+                                            e.stopPropagation(); // Prevent card's onPress from firing
+                                            setSelectedProperty(item.id); // Set the specific object's ID for property screen
                                             setCurrentScreen('properties');
                                         }} />
                                     </View>
@@ -323,8 +346,28 @@ const App = () => {
 
     // Update the property item rendering in PropertiesScreen
     const PropertiesScreen = ({ currentPath }) => {
+        // Find the specific object whose properties we need to display
         const item = findItemByPath(objectsHierarchy, currentPath);
-        if (!item) return null;
+
+        // --- Debugging for white screen ---
+        useEffect(() => {
+            console.log("PropertiesScreen mounted/updated:");
+            console.log("  currentPath:", currentPath);
+            console.log("  item found:", item ? item.naam : "Not Found");
+            if (item && (!item.properties || item.properties.length === 0)) {
+                console.log("  Item has no properties or properties array is empty.");
+            }
+        }, [item, currentPath]);
+        // --- End Debugging ---
+
+        if (!item) {
+            // Render a loading or error state if item is not found
+            return (
+                <View style={[AppStyles.screen, { justifyContent: 'center', alignItems: 'center' }]}>
+                    <Text style={AppStyles.emptyStateText}>Item niet gevonden of wordt geladen...</Text>
+                </View>
+            );
+        }
 
         // Always render the default icon
         const renderIcon = (customColor = colors.lightGray500) => {
@@ -389,20 +432,24 @@ const App = () => {
     };
 
     const AddPropertyScreen = ({ currentPath }) => {
+        // The currentPath here is already the full path to the object (e.g., [1, 101])
+        const objectIdForProperties = currentPath[currentPath.length - 1];
+        // Find the actual item based on the full path
         const item = findItemByPath(objectsHierarchy, currentPath);
-        if (!item) return null;
+
+        if (!item) return null; // Should not happen if navigation is correct
 
         const [newPropertiesList, setNewPropertiesList] = useState([]);
         const [nextNewPropertyId, setNextNewPropertyId] = useState(0);
-        const [selectedTemplate, setSelectedTemplate] = useState(null); // New state for selected template
+        const [selectedTemplateForPropertyAdd, setSelectedTemplateForPropertyAdd] = useState(null); // New state for selected template in this screen
 
-        // Effect to ensure there's always at least one empty field for input
-        useEffect(() => {
-            // Only add an empty field if newPropertiesList.length is 0 AND no template is selected
-            if (newPropertiesList.length === 0 && selectedTemplate === null) {
-                addNewPropertyField();
+        // Helper to get template name for display
+        const getTemplateName = (templateId) => {
+            if (templateId === null) {
+                return "Geen sjabloon";
             }
-        }, [newPropertiesList, selectedTemplate]); // Add selectedTemplate to dependencies
+            return fetchedTemplates[templateId]?.name || "Onbekend sjabloon";
+        };
 
         // Always render the default icon
         const renderIcon = (customColor = colors.lightGray500) => {
@@ -431,11 +478,19 @@ const App = () => {
             });
         };
 
+        // Effect to ensure there's always at least one empty field for input
+        useEffect(() => {
+            // Only add an empty field if newPropertiesList.length === 0 AND no template is selected
+            if (newPropertiesList.length === 0 && selectedTemplateForPropertyAdd === null) {
+                addNewPropertyField();
+            }
+        }, [newPropertiesList, selectedTemplateForPropertyAdd]); // Add selectedTemplateForPropertyAdd to dependencies
+
         // Function to handle saving unsaved properties on back navigation
         const handleSaveOnBack = async () => {
             const validPropertiesToSave = [];
             newPropertiesList.forEach(prop => {
-                if (prop.name.trim() !== '' && prop.value.trim() !== '') {
+                if (prop.name.trim() !== '') { // Only name is required for saving
                     validPropertiesToSave.push({ name: prop.name.trim(), waarde: prop.value.trim() });
                 }
             });
@@ -449,7 +504,7 @@ const App = () => {
                                 'Content-Type': 'application/json',
                             },
                             body: JSON.stringify({
-                                object_id: item.id,
+                                object_id: objectIdForProperties, // Use the ID of the object we are adding properties to
                                 name: prop.name,
                                 waarde: prop.waarde,
                             }),
@@ -458,6 +513,7 @@ const App = () => {
                         const result = await response.json();
                         if (!response.ok) {
                             console.error('Failed to add property:', result.message);
+                            Alert.alert('Error', `Failed to add property ${prop.name}: ${result.message}`);
                             // Optionally, break here or collect failed ones
                         }
                     }
@@ -469,15 +525,14 @@ const App = () => {
                     Alert.alert('Error', 'Er is een onverwachte fout opgetreden bij het toevoegen van eigenschappen.');
                 }
             } else {
-                // If no valid properties to save, just navigate back
                 console.log("No valid properties to save.");
             }
 
             // Reset state and navigate back regardless of save success
             setNewPropertiesList([]);
             setNextNewPropertyId(0);
-            setSelectedTemplate(null); // Reset selected template
-            setCurrentScreen('properties');
+            setSelectedTemplateForPropertyAdd(null); // Reset selected template
+            setCurrentScreen('properties'); // Navigate back to properties view
         };
 
         return (
@@ -537,62 +592,125 @@ const App = () => {
                                 Nieuwe Eigenschappen Toevoegen
                             </Text>
 
-                            {/* Template Selector */}
+                            {/* Template Selector - iOS Fixed Version */}
                             <View style={AppStyles.formGroup}>
                                 <Text style={AppStyles.formLabel}>Kies een sjabloon (optioneel)</Text>
-                                <View style={[
-    AppStyles.pickerContainer,
-    Platform.OS === 'android' && {
-        backgroundColor: colors.white,
-        borderWidth: 1,
-        borderColor: colors.lightGray300,
-        borderRadius: 8,
-        minHeight: 48,
-        justifyContent: 'center',
-    }
-]}>
-                                    <Picker
-                                        selectedValue={selectedTemplate}
-                                        onValueChange={(itemValue) => {
-                                            setSelectedTemplate(itemValue);
-                                            if (itemValue && fetchedTemplates[itemValue]) { // Use fetchedTemplates
-                                                // When a template is selected, populate newPropertiesList
-                                                const templateProps = fetchedTemplates[itemValue].map((prop, index) => ({
-                                                    id: nextNewPropertyId + index, // Ensure unique IDs
-                                                    name: prop.name,
-                                                    value: ''
-                                                }));
-                                                setNewPropertiesList(templateProps);
-                                                // Ensure nextNewPropertyId is incremented by the number of template items
-                                                setNextNewPropertyId(prevId => prevId + templateProps.length);
-                                            } else {
-                                                // Clear if "Geen sjabloon" or no template selected
-                                                setNewPropertiesList([]);
-                                                setNextNewPropertyId(0); // Reset ID counter
-                                                addNewPropertyField(); // Add an empty field if no template selected
-                                            }
-                                        }}
-                                        style={[
-            AppStyles.formInput,
-            { backgroundColor: 'transparent' }, // <-- Force transparent background
-            Platform.OS === 'android' && { color: colors.lightGray700 }
-        ]}
-                                        itemStyle={Platform.OS === 'ios' ? AppStyles.pickerItem : null}
-                                        dropdownIconColor={colors.lightGray600} // Optional: for Android
-                                    >
-                                        <Picker.Item label="Geen sjabloon" value={null} />
-                                        {Object.keys(fetchedTemplates).map((templateName) => (
-                                            <Picker.Item key={templateName} label={templateName} value={templateName} />
-                                        ))}
-                                    </Picker>
-                                </View>
+                                {Platform.OS === 'ios' ? (
+                                    <>
+                                        <Picker
+                                            selectedValue={selectedTemplateForPropertyAdd}
+                                            onValueChange={(itemValue) => {
+                                                setSelectedTemplateForPropertyAdd(itemValue);
+                                                if (itemValue && fetchedTemplates[itemValue]) {
+                                                    const templateProps = fetchedTemplates[itemValue].properties.map((prop, index) => ({
+                                                        id: index,
+                                                        name: prop.name,
+                                                        value: prop.value || ''
+                                                    }));
+                                                    setNewPropertiesList(templateProps);
+                                                    setNextNewPropertyId(templateProps.length);
+                                                } else {
+                                                    setNewPropertiesList([]);
+                                                    setNextNewPropertyId(0);
+                                                    addNewPropertyField();
+                                                }
+                                            }}
+                                            style={{
+                                                height: 44,
+                                                color: colors.lightGray900,
+                                                backgroundColor: 'transparent',
+                                            }}
+                                            itemStyle={{
+                                                height: 44,
+                                                color: colors.lightGray900,
+                                                fontSize: 16,
+                                                textAlign: 'left',
+                                            }}
+                                        >
+                                            <Picker.Item 
+                                                label="Geen sjabloon" 
+                                                value={null}
+                                                color={colors.lightGray600}
+                                            />
+                                            {Object.entries(fetchedTemplates).map(([templateId, tpl]) => (
+                                                <Picker.Item 
+                                                    key={templateId} 
+                                                    label={tpl.name} 
+                                                    value={templateId}
+                                                    color={colors.lightGray900}
+                                                />
+                                            ))}
+                                        </Picker>
+                                        {/* Add a chevron down icon for iOS to make it look more native */}
+                                        <View style={{
+                                            position: 'absolute',
+                                            right: 12,
+                                            top: '50%',
+                                            transform: [{ translateY: -8 }],
+                                            pointerEvents: 'none',
+                                        }}>
+                                            <ChevronDown color={colors.lightGray600} size={16} />
+                                        </View>
+                                    </>
+                                ) : (
+                                    <View style={[
+                                        AppStyles.pickerContainer,
+                                        {
+                                            backgroundColor: colors.white,
+                                            borderWidth: 1,
+                                            borderColor: colors.lightGray300,
+                                            borderRadius: 8,
+                                            minHeight: 48,
+                                            justifyContent: 'center',
+                                        }
+                                    ]}>
+                                        <Picker
+                                            selectedValue={selectedTemplateForPropertyAdd}
+                                            onValueChange={(itemValue) => {
+                                                setSelectedTemplateForPropertyAdd(itemValue);
+                                                if (itemValue && fetchedTemplates[itemValue]) {
+                                                    const templateProps = fetchedTemplates[itemValue].properties.map((prop, index) => ({
+                                                        id: index,
+                                                        name: prop.name,
+                                                        value: prop.value || ''
+                                                    }));
+                                                    setNewPropertiesList(templateProps);
+                                                    setNextNewPropertyId(templateProps.length);
+                                                } else {
+                                                    setNewPropertiesList([]);
+                                                    setNextNewPropertyId(0);
+                                                    addNewPropertyField();
+                                                }
+                                            }}
+                                            style={{
+                                                height: 48,
+                                                color: colors.lightGray700,
+                                                backgroundColor: 'transparent',
+                                            }}
+                                        >
+                                            <Picker.Item 
+                                                label="Geen sjabloon" 
+                                                value={null}
+                                                color={colors.lightGray700}
+                                            />
+                                            {Object.entries(fetchedTemplates).map(([templateId, tpl]) => (
+                                                <Picker.Item 
+                                                    key={templateId} 
+                                                    label={tpl.name} 
+                                                    value={templateId}
+                                                    color={colors.lightGray700}
+                                                />
+                                            ))}
+                                        </Picker>
+                                    </View>
+                                )}
                             </View>
 
-                            {/* Button to Add New Template --- NEW BUTTON HERE --- */}
+                            {/* Button to Add New Template */}
                             <TouchableOpacity
                                 onPress={() => setShowAddTemplateModal(true)} // Open the new modal
                                 style={[
-                                    AppStyles.btnSecondary, // Re-using a secondary button style
+                                    AppStyles.btnSecondary,
                                     { marginBottom: 1.5 * 16, alignSelf: 'center' }
                                 ]}
                             >
@@ -641,7 +759,7 @@ const App = () => {
 
                             {/* Save Button */}
                             <TouchableOpacity
-                                onPress={handleSaveOnBack}
+                                onPress={handleSaveOnBack} // This button also triggers save
                                 style={[
                                     AppStyles.btnPrimary,
                                     AppStyles.btnFull,
@@ -668,10 +786,13 @@ const App = () => {
 
     const AddObjectModal = () => {
         const [name, setName] = useState('');
+        // Removed selectedTemplateId state from here, as per your request
+        // const [selectedTemplateId, setSelectedTemplateId] = useState(null); 
 
         const handleSaveObject = () => {
             if (name.trim()) {
-                handleAddObject(currentPath, { name });
+                // Pass new object data without templateId
+                handleAddObject(currentPath, { name }); // Removed templateId: selectedTemplateId
             } else {
                 Alert.alert("Invoer vereist", "Vul alstublieft de naam in.");
             }
@@ -700,6 +821,45 @@ const App = () => {
                                 returnKeyType="done"
                             />
                         </View>
+
+                        {/* Removed Template Selector from AddObjectModal as requested */}
+                        {/* {Object.keys(fetchedTemplates).length > 0 && (
+                            <View style={AppStyles.formGroup}>
+                                <Text style={AppStyles.formLabel}>Gebruik een Sjabloon (optioneel)</Text>
+                                <View
+                                    pointerEvents="box-none"
+                                    style={[
+                                        AppStyles.pickerContainer,
+                                        Platform.OS === 'android' && {
+                                            backgroundColor: colors.white,
+                                            borderWidth: 1,
+                                            borderColor: colors.lightGray300,
+                                            borderRadius: 8,
+                                            minHeight: 48,
+                                            justifyContent: 'center',
+                                        }
+                                    ]}
+                                >
+                                    <Picker
+                                        selectedValue={selectedTemplateId}
+                                        onValueChange={(itemValue) => setSelectedTemplateId(itemValue)}
+                                        style={[
+                                            AppStyles.pickerStyle,
+                                            Platform.OS === 'android' && { color: colors.lightGray700 }
+                                        ]}
+                                        itemStyle={Platform.OS === 'ios' ? AppStyles.pickerItem : null}
+                                        dropdownIconColor={colors.lightGray600}
+                                    >
+                                        <Picker.Item label="Geen sjabloon" value={null} />
+                                        {Object.entries(fetchedTemplates).map(([templateId, tpl]) => (
+                                            <Picker.Item key={templateId} label={tpl.name} value={templateId} />
+                                        ))}
+                                    </Picker>
+                                </View>
+                            </View>
+                        )} */}
+
+
                         <View style={AppStyles.modalActions}>
                             <TouchableOpacity
                                 onPress={() => setShowAddObjectModal(false)}
@@ -720,9 +880,10 @@ const App = () => {
         );
     };
 
-    // Voeg deze component toe in je index.js of waar je AddTemplateModal gebruikt
+    // AddTemplateModal component
     const AddTemplateModal = () => {
         const [templateName, setTemplateName] = useState('');
+        // Initialize with one empty property field
         const [templateProperties, setTemplateProperties] = useState([{ name: '', value: '' }]);
         const [error, setError] = useState('');
 
@@ -733,7 +894,12 @@ const App = () => {
         };
 
         const handleRemoveProperty = (idx) => {
-            if (templateProperties.length === 1) return;
+            // Ensure there's always at least one field, or if the only field is empty, allow removal.
+            if (templateProperties.length === 1 && (templateProperties[0].name.trim() === '' && templateProperties[0].value.trim() === '')) {
+                // If the last field is empty, just clear it rather than removing
+                setTemplateProperties([{ name: '', value: '' }]);
+                return;
+            }
             setTemplateProperties(templateProperties.filter((_, i) => i !== idx));
         };
 
@@ -747,8 +913,9 @@ const App = () => {
                 setError('Geef het sjabloon een naam.');
                 return;
             }
+            // Filter out empty property names. Value can be empty.
             const validProps = templateProperties.filter(
-                (p) => p.name.trim() // Alleen naam is verplicht, waarde mag leeg zijn
+                (p) => p.name.trim() !== ''
             );
             if (validProps.length === 0) {
                 setError('Voeg minimaal één eigenschap toe.');
@@ -763,20 +930,29 @@ const App = () => {
                     },
                     body: JSON.stringify({
                         name: templateName.trim(),
-                        properties: validProps.map(p => ({ property_name: p.name.trim() })), // <-- DIT IS DE JUISTE MAPPING
+                        // Map property_name and property_value for the API
+                        properties: validProps.map(p => ({
+                            property_name: p.name.trim(),
+                            property_value: p.value.trim() // Send value even if empty
+                        })),
                     }),
                 });
 
                 const result = await response.json();
 
                 if (response.ok) {
-                    // Optioneel: herlaad templates in je app
-                    fetchTemplates && fetchTemplates();
+                    Alert.alert('Success', result.message || 'Sjabloon succesvol opgeslagen.');
+                    fetchTemplates(); // Reload templates in the app's main state
                     setShowAddTemplateModal(false);
+                    // Reset modal state
+                    setTemplateName('');
+                    setTemplateProperties([{ name: '', value: '' }]);
+                    setError('');
                 } else {
                     setError(result.message || 'Opslaan mislukt.');
                 }
             } catch (error) {
+                console.error('Network error during template save:', error);
                 setError('Netwerkfout bij opslaan.');
             }
         };
@@ -792,13 +968,13 @@ const App = () => {
                     style={AppStyles.modalBackdrop}
                 >
                     <View style={[
-    AppStyles.modalContent,
-    {
-        backgroundColor: 'white',
-        maxWidth: IS_DESKTOP ? '70%' : '90%', // <-- maak breder op desktop
-        width: IS_DESKTOP ? 700 : '90%',      // <-- optioneel: vaste px breedte op desktop
-    }
-]}>
+                        AppStyles.modalContent,
+                        {
+                            backgroundColor: 'white',
+                            maxWidth: IS_DESKTOP ? '70%' : '90%', // <-- maak breder op desktop
+                            width: IS_DESKTOP ? 700 : '90%',       // <-- optioneel: vaste px breedte op desktop
+                        }
+                    ]}>
                         <Text style={AppStyles.modalTitle}>Nieuw Sjabloon Toevoegen</Text>
 
                         <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.6 }}>
@@ -825,18 +1001,18 @@ const App = () => {
                                     />
                                     <TextInput
                                         style={[AppStyles.formInput, { flex: 1, marginRight: 8 }]}
-                                        placeholder="Waarde"
+                                        placeholder="Waarde (optioneel)" // Make value optional
                                         value={prop.value}
                                         onChangeText={(text) => handlePropertyChange(idx, 'value', text)}
                                     />
-                                    {templateProperties.length > 1 && (
-                                        <TouchableOpacity onPress={() => handleRemoveProperty(idx)}>
-                                            <Text style={{ color: colors.red500, fontSize: 18 }}>✕</Text>
+                                    {/* Only show remove button if there's more than one property OR if the current one is not empty */}
+                                    {(templateProperties.length > 1 || prop.name.trim() !== '' || prop.value.trim() !== '') && (
+                                        <TouchableOpacity onPress={() => handleRemoveProperty(idx)} style={{ padding: 4 }}>
+                                            <X color={colors.red500} size={20} />
                                         </TouchableOpacity>
                                     )}
                                 </View>
                             ))}
-                            {/* --- HIER DE KNOP TOEVOEGEN --- */}
                             <TouchableOpacity
                                 onPress={handleAddProperty}
                                 style={[AppStyles.btnSecondary, { alignSelf: 'flex-start', marginBottom: 12 }]}
@@ -870,7 +1046,11 @@ const App = () => {
 
 
     // currentLevelItems now directly references the nested children from the fully loaded objectsHierarchy
-    const currentLevelItems = currentPath.length === 0 ? objectsHierarchy : findItemByPath(objectsHierarchy, currentPath)?.children || [];
+    // This logic relies on `findItemByPath` returning the correct object, then accessing its children.
+    const currentLevelItems = currentPath.length === 0
+        ? objectsHierarchy
+        : findItemByPath(objectsHierarchy, currentPath)?.children || [];
+
 
     return (
         <>
@@ -891,9 +1071,11 @@ const App = () => {
                                 />
                             );
                         case 'properties':
-                            return <PropertiesScreen currentPath={currentPath.concat(selectedProperty)} />;
+                            // Pass the full path to the selected object for the PropertiesScreen
+                            return <PropertiesScreen currentPath={[...currentPath, selectedProperty]} />;
                         case 'addProperty':
-                            return <AddPropertyScreen currentPath={currentPath.concat(selectedProperty)} />;
+                            // Pass the full path to the selected object for the AddPropertyScreen
+                            return <AddPropertyScreen currentPath={[...currentPath, selectedProperty]} />;
                         default:
                             return (
                                 <HierarchicalObjectsScreen
@@ -904,9 +1086,9 @@ const App = () => {
                             );
                     }
                 })()}
+                {/* Modals are rendered conditionally outside the main screen switch */}
                 {showAddObjectModal && <AddObjectModal />}
-                {/* Render the new AddTemplateModal */}
-                {showAddTemplateModal && <AddTemplateModal />} {/* <--- NEW MODAL RENDER */}
+                {showAddTemplateModal && <AddTemplateModal />}
             </View>
         </>
     );

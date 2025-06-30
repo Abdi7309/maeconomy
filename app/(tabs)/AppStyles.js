@@ -1,4 +1,4 @@
-import { Dimensions, Platform, StyleSheet } from 'react-native'; // Import StatusBar
+import { Dimensions, Platform, StyleSheet } from 'react-native'; // Import StyleSheet
 
 const { width } = Dimensions.get('window');
 const IS_DESKTOP = width >= 768; // Define your breakpoint for responsive behavior
@@ -91,6 +91,7 @@ const AppStyles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         minHeight: 40, // Add fixed height for consistent alignment
+        justifyContent: 'space-between', // Added for spacing between breadcrumbs/title and placeholder
     },
     headerTitle: {
         fontSize: 1.5 * 16,
@@ -338,6 +339,7 @@ const AppStyles = StyleSheet.create({
     // Property List (on PropertiesScreen)
     propertyList: {
         // Container for displaying existing properties
+        // No specific styles needed here, children will handle layout
     },
     propertyItem: {
         flexDirection: 'row',
@@ -493,8 +495,14 @@ const AppStyles = StyleSheet.create({
         backgroundColor: 'white',
         borderRadius: 16,
         padding: 16,
-        width: IS_DESKTOP ? '20%' : '90%',
+        width: IS_DESKTOP ? '20%' : '90%', // Adjusted width for desktop based on prior discussion
+        maxWidth: IS_DESKTOP ? 700 : '90%', // Max width for desktop modals
         maxHeight: '80%',
+        shadowColor: colors.black, // Apply shadows from the AppStyles
+        shadowOffset: shadows.md.shadowOffset,
+        shadowOpacity: shadows.md.shadowOpacity,
+        shadowRadius: shadows.md.shadowRadius,
+        elevation: shadows.md.elevation,
     },
     modalTitle: {
         fontSize: 1.25 * 16,
@@ -507,6 +515,7 @@ const AppStyles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'space-around',
         marginTop: 1.25 * 16,
+        gap: 12, // Ensure consistent spacing as per previous versions
     },
     // New button styles
     btnPropertyOutline: {
@@ -583,33 +592,53 @@ const AppStyles = StyleSheet.create({
         fontSize: 0.875 * 16,
         fontWeight: '500',
     },
+    // Reverted pickerContainer styling to a simpler version, allowing native picker to show
     pickerContainer: {
         marginTop: 8,
         marginBottom: 8,
-        minHeight: 32,
-        height: 48,
-        justifyContent: 'center',
         backgroundColor: colors.white,
-        borderWidth: 1.5,
+        borderWidth: 1,
         borderColor: colors.lightGray300,
         borderRadius: 8,
-        paddingHorizontal: 8,
-        overflow: 'hidden',
+        // Set fixed height for iOS picker to ensure visibility of the wheel
+        height: Platform.OS === 'ios' ? 150 : 48, // iOS height for native picker, Android minHeight
+        // Removed justifyContent for iOS to allow native picker to render properly
+        // justifyContent: 'center', // This can sometimes interfere with native components
+    },
+    pickerContainerIOS: {
+        backgroundColor: colors.white,
+        borderWidth: 1,
+        borderColor: colors.lightGray300,
+        borderRadius: 8,
+        paddingHorizontal: 0,
+        minHeight: 48,
+        justifyContent: 'center',
+        position: 'relative',
+    },
+    // The pickerStyle is now for the actual Picker component
+    pickerStyle: {
+        height: Platform.OS === 'ios' ? 150 : 50, // iOS height for native picker wheel, Android default
+        width: '100%',
+        color: colors.lightGray700, // Text color for the selected item
+        // Ensure background color is explicitly set for the picker itself
+        backgroundColor: colors.white, // Explicitly set background for the picker
         ...(Platform.OS === 'ios' && {
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 1 },
-            shadowOpacity: 0.08,
-            shadowRadius: 2,
-        }),
-        ...(Platform.OS === 'web' && {
-            borderWidth: 0,
-            borderColor: 'transparent',
-            boxShadow: 'none',
-        }),
+            // Removed padding as native picker handles its own
+            // paddingLeft: 12,
+            // paddingRight: 12,
+        })
+    },
+    pickerStyleIOS: {
+        height: 44,
+        color: colors.lightGray900,
+        backgroundColor: 'transparent',
+        paddingHorizontal: 12,
     },
     pickerItem: {
-        // iOS only: style for individual picker items
-    }
+        // iOS only: style for individual picker items. Best to leave empty or for specific text styling.
+        // Avoid applying background, height, or padding here as it interferes with native wheel.
+    },
+    // Removed styles for the custom template selection modal list items as they are no longer needed
 });
 
 export default AppStyles;
