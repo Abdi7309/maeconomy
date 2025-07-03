@@ -74,7 +74,11 @@ function loginUser($pdo, $username, $password) {
 
 // Function to fetch an object and its children/properties recursively
 function fetchItemWithHierarchy($pdo, $id) {
-    $stmt = $pdo->prepare("SELECT id, parent_id, naam, created_at, updated_at FROM objects WHERE id = ?");
+    // FIXED: Added LEFT JOIN to get the owner's username
+    $stmt = $pdo->prepare("SELECT o.id, o.parent_id, o.user_id, o.naam, o.created_at, o.updated_at, u.username as owner_name
+                           FROM objects o
+                           LEFT JOIN users u ON o.user_id = u.id
+                           WHERE o.id = ?");
     $stmt->execute([$id]);
     $item = $stmt->fetch();
 
@@ -148,9 +152,35 @@ $input = json_decode(file_get_contents('php://input'), true);
 
 switch ($entity) {
     case 'users':
+        if ($method === 'GET') {
+            // Get total object count
+            $total_stmt = $pdo->prepare("SELECT COUNT(id) as total FROM objects");
+            $total_stmt->execute();
+            $total_count = $total_stmt->fetchColumn();
+    
+            // Fetch all users
+            $stmt = $pdo->prepare("SELECT id, username FROM users ORDER BY username ASC");
+            $stmt->execute();
+            $users = $stmt->fetchAll();
+    
+            // For each user, get their object count
+            foreach ($users as &$user) {
+                $count_stmt = $pdo->prepare("SELECT COUNT(id) as count FROM objects WHERE user_id = ?");
+                $count_stmt->execute([$user['id']]);
+                $user['object_count'] = (int)$count_stmt->fetchColumn();
+            }
+    
+            http_response_code(200);
+            echo json_encode([
+                "users" => $users,
+                "total_objects" => (int)$total_count
+            ]);
+            break;
+        }
+
         if ($method !== 'POST') {
             http_response_code(405);
-            echo json_encode(["message" => "Method not allowed for users entity. Use POST."]);
+            echo json_encode(["message" => "Method not allowed for users entity. Use POST or GET."]);
             break;
         }
         if (!isset($input['username']) || !isset($input['password'])) {
@@ -200,16 +230,26 @@ switch ($entity) {
                     }
                 } else {
                     // Get all top-level objects or children of a specific parent
-                    $sql = "SELECT id, parent_id, naam, created_at, updated_at FROM objects ";
+                    $sql = "SELECT o.id, o.parent_id, o.user_id, o.naam, o.created_at, o.updated_at, u.username as owner_name 
+                            FROM objects o 
+                            LEFT JOIN users u ON o.user_id = u.id ";
                     $params = [];
 
+                    // Handle parent_id filter
                     if (isset($_GET['parent_id']) && $_GET['parent_id'] !== '') {
-                        $sql .= "WHERE parent_id = ?";
+                        $sql .= "WHERE o.parent_id = ? ";
                         $params[] = $_GET['parent_id'];
                     } else {
-                        $sql .= "WHERE parent_id IS NULL";
+                        $sql .= "WHERE o.parent_id IS NULL ";
                     }
-                    $sql .= " ORDER BY naam ASC";
+
+                    // Handle user_id filter
+                    if (isset($_GET['filter_user_id']) && $_GET['filter_user_id'] !== 'all') {
+                        $sql .= "AND o.user_id = ? ";
+                        $params[] = $_GET['filter_user_id'];
+                    }
+
+                    $sql .= "ORDER BY o.naam ASC";
 
                     $stmt = $pdo->prepare($sql);
                     $stmt->execute($params);
@@ -232,14 +272,16 @@ switch ($entity) {
                 break;
 
             case 'POST':
-                if (!isset($input['name'])) {
+                if (!isset($input['name']) || !isset($input['user_id'])) {
                     http_response_code(400);
-                    echo json_encode(["message" => "Missing 'name' for new object."]);
+                    echo json_encode(["message" => "Missing 'name' or 'user_id' for new object."]);
                     break;
                 }
                 $parent_id = $input['parent_id'] ?? null;
-                $stmt = $pdo->prepare("INSERT INTO objects (parent_id, naam, created_at, updated_at) VALUES (?, ?, NOW(), NOW())");
-                if ($stmt->execute([$parent_id, $input['name']])) {
+                $user_id = $input['user_id'];
+
+                $stmt = $pdo->prepare("INSERT INTO objects (parent_id, user_id, naam, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())");
+                if ($stmt->execute([$parent_id, $user_id, $input['name']])) {
                     $new_id = $pdo->lastInsertId();
                     http_response_code(201); // Created
                     echo json_encode(["message" => "Object created successfully.", "id" => $new_id]);

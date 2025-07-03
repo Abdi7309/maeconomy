@@ -601,7 +601,7 @@ const AppStyles = StyleSheet.create({
         borderColor: colors.lightGray300,
         borderRadius: 8,
         // Set fixed height for iOS picker to ensure visibility of the wheel
-        height: Platform.OS === 'ios' ? 150 : 48, // iOS height for native picker, Android minHeight
+        height: Platform.OS === 'ios' ? 150 : 58, // iOS height for native picker, Android minHeight
         // Removed justifyContent for iOS to allow native picker to render properly
         // justifyContent: 'center', // This can sometimes interfere with native components
     },
@@ -638,7 +638,31 @@ const AppStyles = StyleSheet.create({
         // iOS only: style for individual picker items. Best to leave empty or for specific text styling.
         // Avoid applying background, height, or padding here as it interferes with native wheel.
     },
-    // Removed styles for the custom template selection modal list items as they are no longer needed
+    // Filter Modal Styles
+    filterFab: {
+        position: 'absolute',
+        bottom: 90, // Positioned above the main FAB
+        right: 20,
+        backgroundColor: colors.white,
+        width: 48,
+        height: 48,
+        borderRadius: 24,
+        alignItems: 'center',
+        justifyContent: 'center',
+        ...shadows.md,
+        borderColor: colors.lightGray200,
+        borderWidth: 1,
+    },
+    filterOptionButton: {
+        paddingVertical: 16,
+        borderBottomWidth: 1,
+        borderBottomColor: colors.lightGray200,
+    },
+    filterOptionText: {
+        fontSize: 16,
+        color: colors.lightGray800,
+        textAlign: 'center',
+    }
 });
 
 export default AppStyles;
