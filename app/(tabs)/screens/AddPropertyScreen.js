@@ -6,7 +6,7 @@ import AddTemplateModal from '../components/modals/AddTemplateModal';
 import TemplatePickerModal from '../components/modals/TemplatePickerModal';
 
 const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, setCurrentScreen, onSave, onTemplateAdded, findItemByPath }) => {
-    
+
     const objectIdForProperties = currentPath[currentPath.length - 1];
     const item = findItemByPath(objectsHierarchy, currentPath);
 
@@ -43,41 +43,43 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
         });
     };
 
+    // --- SOLUTION 2: Simplified useEffect ---
+    // This ensures there's always at least one input field if the list becomes empty.
     useEffect(() => {
-        if (newPropertiesList.length === 0 && selectedTemplateForPropertyAdd === null) {
+        if (newPropertiesList.length === 0) {
             addNewPropertyField();
         }
-    }, [newPropertiesList, selectedTemplateForPropertyAdd]);
+    }, [newPropertiesList]);
 
     const handleSaveOnBack = async () => {
-        const partiallyFilled = newPropertiesList.find(prop => 
+        const partiallyFilled = newPropertiesList.find(prop =>
             (prop.name.trim() !== '' && prop.value.trim() === '') ||
             (prop.name.trim() === '' && prop.value.trim() !== '')
         );
-    
+
         if (partiallyFilled) {
             Alert.alert('Incomplete Entry', 'Please provide both a name and a value for each property, or leave both fields empty to ignore.');
-            return; 
+            return;
         }
-    
-        const validPropertiesToSave = newPropertiesList.filter(prop => 
+
+        const validPropertiesToSave = newPropertiesList.filter(prop =>
             prop.name.trim() !== '' && prop.value.trim() !== ''
         );
-    
+
         if (validPropertiesToSave.length > 0) {
             const success = await onSave(objectIdForProperties, validPropertiesToSave);
             if (!success) return; // Stop if saving failed
         }
-    
+
         setCurrentScreen('properties');
     };
 
     return (
         <View style={[AppStyles.screen, { backgroundColor: colors.white }]}>
             <StatusBar barStyle="dark-content" />
-            
-            {showTemplatePickerModal && <TemplatePickerModal 
-                visible={showTemplatePickerModal} 
+
+            {showTemplatePickerModal && <TemplatePickerModal
+                visible={showTemplatePickerModal}
                 onClose={() => setShowTemplatePickerModal(false)}
                 templates={fetchedTemplates}
                 onSelect={(templateId) => {
@@ -89,15 +91,14 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                         setNewPropertiesList(templateProps);
                         setNextNewPropertyId(templateProps.length);
                     } else {
-                        setNewPropertiesList([]);
+                        setNewPropertiesList([]); // This will trigger the useEffect to add one empty field
                         setNextNewPropertyId(0);
-                        addNewPropertyField();
                     }
                     setShowTemplatePickerModal(false);
                 }}
             />}
 
-            {showAddTemplateModal && <AddTemplateModal 
+            {showAddTemplateModal && <AddTemplateModal
                 visible={showAddTemplateModal}
                 onClose={() => setShowAddTemplateModal(false)}
                 onTemplateSaved={onTemplateAdded}
@@ -142,7 +143,7 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                         <Text style={[AppStyles.infoItemValue, { marginBottom: 16, fontSize: 16, fontWeight: '600' }]}>
                             Nieuwe Eigenschappen Toevoegen
                         </Text>
-                        
+
                         <View style={AppStyles.formGroup}>
                             <Text style={AppStyles.formLabel}>Kies een sjabloon (optioneel)</Text>
                             <TouchableOpacity onPress={() => setShowTemplatePickerModal(true)} style={[AppStyles.formInput, { justifyContent: 'center' }]}>
@@ -158,12 +159,22 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                         >
                             <Text style={AppStyles.btnSecondaryText}>+ Nieuw sjabloon toevoegen</Text>
                         </TouchableOpacity>
-                        
+
+                        {/* --- SOLUTION 1: Labels moved outside the map --- */}
+                        <View style={[AppStyles.formRow, { marginBottom: 4 }]}>
+                            <View style={[AppStyles.formGroupHalf, { marginRight: 8 }]}>
+                                <Text style={AppStyles.formLabel}>Eigenschap Naam</Text>
+                            </View>
+                            <View style={[AppStyles.formGroupHalf, { marginLeft: 8 }]}>
+                                <Text style={AppStyles.formLabel}>Waarde</Text>
+                            </View>
+                        </View>
+
                         {newPropertiesList.map(prop => (
-                            <View key={prop.id} style={{ marginBottom: 16, borderWidth: 1, borderColor: colors.lightGray200, borderRadius: 8, padding: 16 }}>
+                            <View key={prop.id} style={{ marginBottom: 12 }}>
                                 <View style={AppStyles.formRow}>
-                                    <View style={[AppStyles.formGroupHalf, { marginRight: 8 }]}>
-                                        <Text style={AppStyles.formLabel}>Eigenschap Naam</Text>
+                                    <View style={[AppStyles.formGroupHalf, { marginRight: 8, marginBottom: 0 }]}>
+                                        {/* Label is removed from here */}
                                         <TextInput
                                             placeholder="Bijv. Gewicht"
                                             value={prop.name}
@@ -172,8 +183,8 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                             returnKeyType="next"
                                         />
                                     </View>
-                                    <View style={[AppStyles.formGroupHalf, { marginLeft: 8 }]}>
-                                        <Text style={AppStyles.formLabel}>Waarde</Text>
+                                    <View style={[AppStyles.formGroupHalf, { marginLeft: 8, marginBottom: 0 }]}>
+                                        {/* Label is removed from here */}
                                         <TextInput
                                             placeholder="Bijv. 2kg"
                                             value={prop.value}
@@ -183,8 +194,9 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                             onSubmitEditing={addNewPropertyField}
                                         />
                                     </View>
-                                    {(newPropertiesList.length > 1 || (prop.name.trim() !== '' || prop.value.trim() !== '')) && (
-                                        <TouchableOpacity onPress={() => removePropertyField(prop.id)} style={{ padding: 4, alignSelf: 'flex-start', marginTop: 30, left: 5 }}>
+                                    {/* Conditionally show the remove button */}
+                                    {(newPropertiesList.length > 1) && (
+                                        <TouchableOpacity onPress={() => removePropertyField(prop.id)} style={{ padding: 4, alignSelf: 'center', marginLeft: 8 }}>
                                             <X color={colors.red600} size={20} />
                                         </TouchableOpacity>
                                     )}

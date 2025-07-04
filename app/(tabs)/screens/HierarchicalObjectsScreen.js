@@ -99,7 +99,7 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                                     <View style={AppStyles.cardContent}>
                                         <Text style={AppStyles.cardTitle}>{item.naam}</Text>
                                         <Text style={AppStyles.cardSubtitle}>
-                                            Owner: {item.owner_name || 'Unknown'}
+                                            Maker: {item.owner_name || 'Unknown'}
                                         </Text>
                                         <Text style={AppStyles.cardSubtitle}>
                                             {(item.properties || []).length} eigenschap{(item.properties || []).length !== 1 ? 'pen' : ''}
