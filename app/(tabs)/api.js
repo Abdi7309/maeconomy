@@ -1,11 +1,11 @@
-import { Alert } from 'react-native';
-import CONFIG from './config/config'; // <-- Import config
+import { Alert, Platform } from 'react-native';
+import CONFIG from './config/config';
 
-const API_BASE_URL = CONFIG.API_BASE_URL; // <-- Use config
+// --- All other functions (fetchAllUsers, handleLogin, etc.) remain unchanged ---
 
 export const fetchAllUsers = async () => {
     try {
-        const response = await fetch(`${API_BASE_URL}?entity=users`);
+        const response = await fetch(`${CONFIG.API_BASE_URL}?entity=users`);
         if (!response.ok) throw new Error('Failed to fetch users');
         return await response.json();
     } catch (error) {
@@ -16,7 +16,7 @@ export const fetchAllUsers = async () => {
 
 export const handleLogin = async (username, password) => {
     try {
-        const response = await fetch(`${API_BASE_URL}?entity=users&action=login`, {
+        const response = await fetch(`${CONFIG.API_BASE_URL}?entity=users&action=login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password }),
@@ -30,7 +30,7 @@ export const handleLogin = async (username, password) => {
 
 export const handleRegister = async (username, password) => {
     try {
-        const response = await fetch(`${API_BASE_URL}?entity=users&action=register`, {
+        const response = await fetch(`${CONFIG.API_BASE_URL}?entity=users&action=register`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password }),
@@ -44,7 +44,7 @@ export const handleRegister = async (username, password) => {
 
 export const fetchAndSetAllObjects = async (filterOption) => {
     try {
-        const topLevelResponse = await fetch(`${API_BASE_URL}?entity=objects&filter_user_id=${filterOption}`);
+        const topLevelResponse = await fetch(`${CONFIG.API_BASE_URL}?entity=objects&filter_user_id=${filterOption}`);
         if (!topLevelResponse.ok) {
             throw new Error(`HTTP error! status: ${topLevelResponse.status} for top-level objects`);
         }
@@ -52,7 +52,7 @@ export const fetchAndSetAllObjects = async (filterOption) => {
 
         const hydrationResults = await Promise.allSettled(topLevelObjects.map(async (obj) => {
             try {
-                const fullObjectResponse = await fetch(`${API_BASE_URL}?entity=objects&id=${obj.id}`);
+                const fullObjectResponse = await fetch(`${CONFIG.API_BASE_URL}?entity=objects&id=${obj.id}`);
                 if (!fullObjectResponse.ok) {
                     console.warn(`Failed to fetch full hierarchy for object ID ${obj.id}. Status: ${fullObjectResponse.status}`);
                     return null;
@@ -78,14 +78,14 @@ export const fetchAndSetAllObjects = async (filterOption) => {
 
 export const fetchTemplates = async () => {
     try {
-        const response = await fetch(`${API_BASE_URL}?entity=templates`);
+        const response = await fetch(`${CONFIG.API_BASE_URL}?entity=templates`);
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
         const templatesData = await response.json();
 
         const formattedTemplates = {};
         await Promise.all(templatesData.map(async (template) => {
             try {
-                const propertiesResponse = await fetch(`${API_BASE_URL}?entity=templates&id=${template.id}`);
+                const propertiesResponse = await fetch(`${CONFIG.API_BASE_URL}?entity=templates&id=${template.id}`);
                 if (!propertiesResponse.ok) return;
                 const templateWithProperties = await propertiesResponse.json();
                 formattedTemplates[String(template.id)] = {
@@ -112,7 +112,7 @@ export const handleAddObject = async (parentPath, newObjectData, userToken) => {
     const { name } = newObjectData;
 
     try {
-        const apiResponse = await fetch(`${API_BASE_URL}?entity=objects`, {
+        const apiResponse = await fetch(`${CONFIG.API_BASE_URL}?entity=objects`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -139,18 +139,44 @@ export const handleAddObject = async (parentPath, newObjectData, userToken) => {
     }
 };
 
+
+// --- FIX: This is the function your index.js is looking for, now with file upload support ---
+/**
+ * Adds multiple properties, each potentially with a file.
+ * @param {string} objectId - The ID of the object to add properties to.
+ * @param {Array} properties - An array of property objects from the state.
+ * @returns {Promise<boolean>}
+ */
 export const addProperties = async (objectId, properties) => {
     try {
+        // Use Promise.all to wait for all individual property requests to complete.
         await Promise.all(properties.map(async (prop) => {
-            const response = await fetch(`${API_BASE_URL}?entity=properties`, {
+            const formData = new FormData();
+            formData.append('object_id', objectId);
+            formData.append('name', prop.name.trim());
+            formData.append('waarde', prop.value.trim());
+
+            // Check if there's a file for this specific property and append it.
+            if (prop.file) {
+                if (Platform.OS === 'web') {
+                    // On web, we have the original File object stored in _webFile
+                    formData.append('file', prop.file._webFile, prop.file.name);
+                } else {
+                    // On native, we use the { uri, type, name } structure
+                    formData.append('file', {
+                        uri: prop.file.uri,
+                        type: prop.file.mimeType,
+                        name: prop.file.name,
+                    });
+                }
+            }
+
+            // Send one request per property.
+            const response = await fetch(`${CONFIG.API_BASE_URL}?entity=properties`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    object_id: objectId,
-                    name: prop.name.trim(),
-                    waarde: prop.value.trim(),
-                }),
+                body: formData, // FormData automatically sets the correct headers
             });
+
             if (!response.ok) {
                 const errorResult = await response.json();
                 throw new Error(`Failed to save property '${prop.name}': ${errorResult.message || 'Unknown error'}`);

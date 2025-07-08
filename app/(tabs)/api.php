@@ -72,9 +72,16 @@ function loginUser($pdo, $username, $password) {
 }
 
 
+// --- HELPER FUNCTION to get files for a property ---
+function getPropertyFiles($pdo, $property_id) {
+    $stmt = $pdo->prepare("SELECT id, file_path, file_name, file_type FROM property_files WHERE property_id = ?");
+    $stmt->execute([$property_id]);
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+
 // Function to fetch an object and its children/properties recursively
 function fetchItemWithHierarchy($pdo, $id) {
-    // FIXED: Added LEFT JOIN to get the owner's username
     $stmt = $pdo->prepare("SELECT o.id, o.parent_id, o.user_id, o.naam, o.created_at, o.updated_at, u.username as owner_name
                            FROM objects o
                            LEFT JOIN users u ON o.user_id = u.id
@@ -89,7 +96,14 @@ function fetchItemWithHierarchy($pdo, $id) {
     // Fetch properties for the current object (using 'eigenschappen' table)
     $stmt_prop = $pdo->prepare("SELECT id, object_id, name, waarde, created_at, updated_at FROM eigenschappen WHERE object_id = ?");
     $stmt_prop->execute([$item['id']]);
-    $item['properties'] = $stmt_prop->fetchAll();
+    $properties = $stmt_prop->fetchAll();
+
+    // For each property, fetch its associated files
+    foreach ($properties as &$property) {
+        $property['files'] = getPropertyFiles($pdo, $property['id']);
+    }
+    $item['properties'] = $properties;
+
 
     // Fetch children for the current object recursively
     $stmt_children = $pdo->prepare("SELECT id FROM objects WHERE parent_id = ? ORDER BY naam ASC");
@@ -148,7 +162,10 @@ $id = $_GET['id'] ?? null; // For specific item operations
 $object_id = $_GET['object_id'] ?? null; // For properties related to an object
 
 // Get request body for POST/PUT requests
-$input = json_decode(file_get_contents('php://input'), true);
+$input = (isset($_SERVER['CONTENT_TYPE']) && strpos($_SERVER['CONTENT_TYPE'], 'application/json') !== false)
+    ? json_decode(file_get_contents('php://input'), true)
+    : null;
+
 
 switch ($entity) {
     case 'users':
@@ -351,19 +368,71 @@ switch ($entity) {
                 break;
 
             case 'POST':
-                if (!isset($input['object_id']) || !isset($input['name']) || !isset($input['waarde'])) {
+                // Data now comes from multipart/form-data, so we use $_POST and $_FILES
+                if (!isset($_POST['object_id']) || !isset($_POST['name'])) {
                     http_response_code(400);
-                    echo json_encode(["message" => "Missing 'object_id', 'name', or 'waarde' for new property."]);
+                    echo json_encode(["message" => "Missing 'object_id' or 'name' for new property."]);
                     break;
                 }
-                $stmt = $pdo->prepare("INSERT INTO eigenschappen (object_id, name, waarde, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())");
-                if ($stmt->execute([$input['object_id'], $input['name'], $input['waarde']])) {
-                    $new_id = $pdo->lastInsertId();
-                    http_response_code(201); // Created
-                    echo json_encode(["message" => "Property created successfully.", "id" => $new_id]);
-                } else {
+
+                $object_id = $_POST['object_id'];
+                $name = $_POST['name'];
+                $waarde = $_POST['waarde'] ?? '';
+
+                $pdo->beginTransaction();
+                try {
+                    // Insert the property text data
+                    $stmt = $pdo->prepare("INSERT INTO eigenschappen (object_id, name, waarde, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())");
+                    $stmt->execute([$object_id, $name, $waarde]);
+                    $new_property_id = $pdo->lastInsertId();
+
+                    $uploadDir = 'uploads/';
+
+                    // --- Handle multiple file uploads (files[]) ---
+                    if (isset($_FILES['files'])) {
+                        $files = $_FILES['files'];
+                        for ($i = 0; $i < count($files['name']); $i++) {
+                            if ($files['error'][$i] === UPLOAD_ERR_OK) {
+                                $originalName = basename($files["name"][$i]);
+                                $fileExtension = pathinfo($originalName, PATHINFO_EXTENSION);
+                                $safeFileName = uniqid('file_', true) . '.' . $fileExtension;
+                                $uploadFilePath = $uploadDir . $safeFileName;
+
+                                if (move_uploaded_file($files['tmp_name'][$i], $uploadFilePath)) {
+                                    $stmt_file = $pdo->prepare("INSERT INTO property_files (property_id, file_path, file_name, file_type) VALUES (?, ?, ?, ?)");
+                                    $stmt_file->execute([$new_property_id, $uploadFilePath, $originalName, $files['type'][$i]]);
+                                } else {
+                                    throw new Exception("Server error: Failed to move uploaded file '{$originalName}'. Check folder permissions.");
+                                }
+                            }
+                        }
+                    }
+
+                    // --- Also handle single file upload (file) for backward compatibility ---
+                    if (isset($_FILES['file']) && $_FILES['file']['error'] === UPLOAD_ERR_OK) {
+                        $file = $_FILES['file'];
+                        $originalName = basename($file["name"]);
+                        $fileExtension = pathinfo($originalName, PATHINFO_EXTENSION);
+                        $safeFileName = uniqid('file_', true) . '.' . $fileExtension;
+                        $uploadFilePath = $uploadDir . $safeFileName;
+
+                        if (move_uploaded_file($file['tmp_name'], $uploadFilePath)) {
+                            $stmt_file = $pdo->prepare("INSERT INTO property_files (property_id, file_path, file_name, file_type) VALUES (?, ?, ?, ?)");
+                            $stmt_file->execute([$new_property_id, $uploadFilePath, $originalName, $file['type']]);
+                        } else {
+                            throw new Exception("Server error: Failed to move uploaded file. Check folder permissions.");
+                        }
+                    }
+
+                    $pdo->commit();
+                    http_response_code(201);
+                    echo json_encode(["message" => "Property created successfully.", "id" => $new_property_id]);
+
+                } catch (Exception $e) {
+                    $pdo->rollBack();
+                    error_log("Error in property creation: " . $e->getMessage());
                     http_response_code(500);
-                    echo json_encode(["message" => "Failed to create property."]);
+                    echo json_encode(["message" => "Failed to create property: " . $e->getMessage()]);
                 }
                 break;
 

@@ -1,14 +1,19 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, Alert, StatusBar } from 'react-native';
-import { ChevronLeft, Plus, X, Tag } from 'lucide-react-native';
+import { ChevronLeft, Plus, X, Tag, Paperclip, FileText } from 'lucide-react-native';
 import AppStyles, { colors } from '../AppStyles';
 import AddTemplateModal from '../components/modals/AddTemplateModal';
 import TemplatePickerModal from '../components/modals/TemplatePickerModal';
+import * as DocumentPicker from 'expo-document-picker';
+// The onSave prop from index.js will call addProperties from api.js
+// so we don't need a direct import here.
 
 const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, setCurrentScreen, onSave, onTemplateAdded, findItemByPath }) => {
 
     const objectIdForProperties = currentPath[currentPath.length - 1];
     const item = findItemByPath(objectsHierarchy, currentPath);
+    
+    const webInputRef = useRef(null);
 
     if (!item) return null;
 
@@ -18,14 +23,13 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
     const [showTemplatePickerModal, setShowTemplatePickerModal] = useState(false);
     const [showAddTemplateModal, setShowAddTemplateModal] = useState(false);
 
-
     const renderIcon = (customColor = colors.lightGray500) => {
         return <Tag color={customColor} size={20} />;
     };
 
     const addNewPropertyField = () => {
         setNewPropertiesList(prevList => {
-            const newField = { id: nextNewPropertyId, name: '', value: '' };
+            const newField = { id: nextNewPropertyId, name: '', value: '', file: null };
             setNextNewPropertyId(prevId => prevId + 1);
             return [...prevList, newField];
         });
@@ -43,39 +47,91 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
         });
     };
 
-    // --- SOLUTION 2: Simplified useEffect ---
-    // This ensures there's always at least one input field if the list becomes empty.
     useEffect(() => {
         if (newPropertiesList.length === 0) {
             addNewPropertyField();
         }
     }, [newPropertiesList]);
 
+    const handleSelectFile = async (propertyId) => {
+        if (Platform.OS === 'web') {
+            webInputRef.current.setAttribute('data-property-id', propertyId);
+            webInputRef.current.click();
+        } else {
+            try {
+                const result = await DocumentPicker.getDocumentAsync({ type: '*/*' });
+                if (!result.canceled) {
+                    const file = result.assets[0];
+                    updateFileForProperty(propertyId, file);
+                }
+            } catch (err) {
+                Alert.alert('Error', 'An error occurred while picking the file.');
+                console.error('Document Picker Error:', err);
+            }
+        }
+    };
+
+    const handleWebFileSelect = (event) => {
+        if (event.target.files && event.target.files[0]) {
+            const webFile = event.target.files[0];
+            const propertyId = parseInt(webInputRef.current.getAttribute('data-property-id'), 10);
+            
+            const fileObject = {
+                name: webFile.name,
+                size: webFile.size,
+                type: webFile.type,
+                uri: URL.createObjectURL(webFile),
+                _webFile: webFile
+            };
+            updateFileForProperty(propertyId, fileObject);
+        }
+    };
+    
+    const updateFileForProperty = (propertyId, fileObject) => {
+        setNewPropertiesList(prevList =>
+            prevList.map(prop =>
+                prop.id === propertyId ? { ...prop, file: fileObject } : prop
+            )
+        );
+    };
+
+    const removeFileFromProperty = (propertyId) => {
+         setNewPropertiesList(prevList =>
+            prevList.map(prop =>
+                prop.id === propertyId ? { ...prop, file: null } : prop
+            )
+        );
+    };
+
     const handleSaveOnBack = async () => {
-        const partiallyFilled = newPropertiesList.find(prop =>
-            (prop.name.trim() !== '' && prop.value.trim() === '') ||
-            (prop.name.trim() === '' && prop.value.trim() !== '')
+        const validPropertiesToSave = newPropertiesList.filter(prop =>
+            prop.name.trim() !== ''
         );
 
-        if (partiallyFilled) {
-            Alert.alert('Incomplete Entry', 'Please provide both a name and a value for each property, or leave both fields empty to ignore.');
+        if (validPropertiesToSave.length === 0) {
+            setCurrentScreen('properties');
             return;
         }
 
-        const validPropertiesToSave = newPropertiesList.filter(prop =>
-            prop.name.trim() !== '' && prop.value.trim() !== ''
-        );
+        // This calls the `handleAddProperties` function from your index.js
+        const success = await onSave(objectIdForProperties, validPropertiesToSave);
 
-        if (validPropertiesToSave.length > 0) {
-            const success = await onSave(objectIdForProperties, validPropertiesToSave);
-            if (!success) return; // Stop if saving failed
+        if (success) {
+            // The refresh is handled by the parent (index.js)
+            setCurrentScreen('properties');
         }
-
-        setCurrentScreen('properties');
     };
 
     return (
-        <View style={[AppStyles.screen, { backgroundColor: colors.white }]}>
+        <View style={[AppStyles.screen, { backgroundColor: colors.white, flex: 1 }]}>
+            {Platform.OS === 'web' && (
+                <input
+                    type="file"
+                    ref={webInputRef}
+                    style={{ display: 'none' }}
+                    onChange={handleWebFileSelect}
+                />
+            )}
             <StatusBar barStyle="dark-content" />
 
             {showTemplatePickerModal && <TemplatePickerModal
@@ -86,12 +142,12 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                     setSelectedTemplateForPropertyAdd(templateId);
                     if (templateId && fetchedTemplates[templateId]) {
                         const templateProps = fetchedTemplates[templateId].properties.map((prop, index) => ({
-                            id: index, name: prop.name, value: prop.value || ''
+                            id: index, name: prop.name, value: prop.value || '', file: null
                         }));
                         setNewPropertiesList(templateProps);
                         setNextNewPropertyId(templateProps.length);
                     } else {
-                        setNewPropertiesList([]); // This will trigger the useEffect to add one empty field
+                        setNewPropertiesList([]);
                         setNextNewPropertyId(0);
                     }
                     setShowTemplatePickerModal(false);
@@ -105,16 +161,18 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
             />}
 
             <KeyboardAvoidingView
-                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
                 style={{ flex: 1 }}
             >
                 <View style={AppStyles.header}>
                     <View style={AppStyles.headerFlex}>
-                        <TouchableOpacity onPress={handleSaveOnBack} style={AppStyles.headerBackButton}>
+                        <TouchableOpacity onPress={() => setCurrentScreen('properties')} style={AppStyles.headerBackButton}>
                             <ChevronLeft color={colors.lightGray700} size={24} />
                         </TouchableOpacity>
                         <Text style={AppStyles.headerTitleLg}>Eigenschap Toevoegen</Text>
-                        <View style={AppStyles.headerPlaceholder} />
+                        <TouchableOpacity onPress={handleSaveOnBack} style={[AppStyles.headerBackButton, {marginRight: 0, marginLeft: 16}]}>
+                            <Text style={{color: colors.blue600, fontWeight: '600'}}>Opslaan</Text>
+                        </TouchableOpacity>
                     </View>
                 </View>
                 <ScrollView
@@ -141,7 +199,7 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                     </View>
                     <View style={[AppStyles.card, { marginBottom: 24, padding: 16 }]}>
                         <Text style={[AppStyles.infoItemValue, { marginBottom: 16, fontSize: 16, fontWeight: '600' }]}>
-                            Nieuwe Eigenschappen Toevoegen
+                            Nieuwe Eigenschappen
                         </Text>
 
                         <View style={AppStyles.formGroup}>
@@ -152,7 +210,6 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                 </Text>
                             </TouchableOpacity>
                         </View>
-
                         <TouchableOpacity
                             onPress={() => setShowAddTemplateModal(true)}
                             style={[AppStyles.btnSecondary, { marginBottom: 16, alignSelf: 'center' }]}
@@ -160,50 +217,68 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                             <Text style={AppStyles.btnSecondaryText}>+ Nieuw sjabloon toevoegen</Text>
                         </TouchableOpacity>
 
-                        {/* --- SOLUTION 1: Labels moved outside the map --- */}
-                        <View style={[AppStyles.formRow, { marginBottom: 4 }]}>
-                            <View style={[AppStyles.formGroupHalf, { marginRight: 8 }]}>
-                                <Text style={AppStyles.formLabel}>Eigenschap Naam</Text>
+                        {Platform.OS === 'web' && (
+                            <View style={[AppStyles.formRow, { marginBottom: 4 }]}>
+                                <View style={[AppStyles.formGroupHalf, { marginRight: 8 }]}><Text style={AppStyles.formLabel}>Eigenschap Naam</Text></View>
+                                <View style={[AppStyles.formGroupHalf, { marginLeft: 8 }]}><Text style={AppStyles.formLabel}>Waarde</Text></View>
                             </View>
-                            <View style={[AppStyles.formGroupHalf, { marginLeft: 8 }]}>
-                                <Text style={AppStyles.formLabel}>Waarde</Text>
-                            </View>
-                        </View>
+                        )}
 
-                        {newPropertiesList.map(prop => (
-                            <View key={prop.id} style={{ marginBottom: 12 }}>
-                                <View style={AppStyles.formRow}>
-                                    <View style={[AppStyles.formGroupHalf, { marginRight: 8, marginBottom: 0 }]}>
-                                        {/* Label is removed from here */}
-                                        <TextInput
-                                            placeholder="Bijv. Gewicht"
-                                            value={prop.name}
-                                            onChangeText={(text) => handlePropertyFieldChange(prop.id, 'name', text)}
-                                            style={AppStyles.formInput}
-                                            returnKeyType="next"
-                                        />
+                        {newPropertiesList.map((prop, index) => (
+                            <View key={prop.id} style={{ marginBottom: 16, borderTopWidth: index > 0 ? 1 : 0, borderColor: colors.lightGray100, paddingTop: index > 0 ? 16 : 0 }}>
+                                
+                                {Platform.OS === 'web' ? (
+                                    <View>
+                                        <View style={[AppStyles.formRow, { alignItems: 'center', marginBottom: 12 }]}>
+                                            <View style={[AppStyles.formGroupHalf, { marginRight: 8, marginBottom: 0 }]}>
+                                                <TextInput placeholder="Bijv. Gewicht" value={prop.name} onChangeText={(text) => handlePropertyFieldChange(prop.id, 'name', text)} style={AppStyles.formInput} />
+                                            </View>
+                                            <View style={[AppStyles.formGroupHalf, { marginLeft: 8, marginBottom: 0, flexDirection: 'row', alignItems: 'center' }]}>
+                                                <TextInput placeholder="Bijv. 2kg" value={prop.value} onChangeText={(text) => handlePropertyFieldChange(prop.id, 'value', text)} style={[AppStyles.formInput, { flex: 1 }]} />
+                                                <TouchableOpacity onPress={() => handleSelectFile(prop.id)} style={{ paddingLeft: 8, paddingVertical: 4 }}>
+                                                    <Paperclip color={prop.file ? colors.blue600 : colors.lightGray500} size={22} />
+                                                </TouchableOpacity>
+                                                {(newPropertiesList.length > 1) && (<TouchableOpacity onPress={() => removePropertyField(prop.id)} style={{ paddingLeft: 4, paddingVertical: 4 }}><X color={colors.red600} size={20} /></TouchableOpacity>)}
+                                            </View>
+                                        </View>
                                     </View>
-                                    <View style={[AppStyles.formGroupHalf, { marginLeft: 8, marginBottom: 0 }]}>
-                                        {/* Label is removed from here */}
-                                        <TextInput
-                                            placeholder="Bijv. 2kg"
-                                            value={prop.value}
-                                            onChangeText={(text) => handlePropertyFieldChange(prop.id, 'value', text)}
-                                            style={AppStyles.formInput}
-                                            returnKeyType="done"
-                                            onSubmitEditing={addNewPropertyField}
-                                        />
+                                ) : (
+                                    <View>
+                                        <View style={AppStyles.formGroup}>
+                                            <Text style={AppStyles.formLabel}>Eigenschap Naam</Text>
+                                            <TextInput placeholder="Bijv. Gewicht" value={prop.name} onChangeText={(text) => handlePropertyFieldChange(prop.id, 'name', text)} style={AppStyles.formInput} />
+                                        </View>
+                                        <View style={AppStyles.formGroup}>
+                                            <Text style={AppStyles.formLabel}>Waarde</Text>
+                                            <TextInput placeholder="Bijv. 2kg" value={prop.value} onChangeText={(text) => handlePropertyFieldChange(prop.id, 'value', text)} style={AppStyles.formInput} />
+                                        </View>
+                                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+                                            <TouchableOpacity onPress={() => handleSelectFile(prop.id)} style={{ flexDirection: 'row', alignItems: 'center', padding: 8, backgroundColor: colors.lightGray100, borderRadius: 8, alignSelf: 'flex-start' }}>
+                                                <Paperclip color={colors.blue600} size={18} />
+                                                <Text style={{ marginLeft: 8, color: colors.lightGray700, fontWeight: '500' }}>{prop.file ? 'Bestand wijzigen' : 'Bestand bijvoegen'}</Text>
+                                            </TouchableOpacity>
+                                            {(newPropertiesList.length > 1) && (<TouchableOpacity onPress={() => removePropertyField(prop.id)} style={{ padding: 8 }}><X color={colors.red600} size={20} /></TouchableOpacity>)}
+                                        </View>
                                     </View>
-                                    {/* Conditionally show the remove button */}
-                                    {(newPropertiesList.length > 1) && (
-                                        <TouchableOpacity onPress={() => removePropertyField(prop.id)} style={{ padding: 4, alignSelf: 'center', marginLeft: 8 }}>
-                                            <X color={colors.red600} size={20} />
-                                        </TouchableOpacity>
-                                    )}
-                                </View>
+                                )}
+
+                                {/* --- START OF UI IMPROVEMENT --- */}
+                                {/* This replaces the simple "Geselecteerd: ..." text */}
+                                {prop.file && (
+                                    <View style={{marginTop: 12}}>
+                                        <Text style={[AppStyles.formLabel, {marginBottom: 4}]}>Bijlage</Text>
+                                        <View style={{flexDirection: 'row', alignItems: 'center', backgroundColor: colors.lightGray50, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 6, borderWidth: 1, borderColor: colors.lightGray200}}>
+                                            <FileText size={18} color={colors.lightGray600} />
+                                            <Text style={{flex: 1, marginLeft: 12, color: colors.lightGray700}} numberOfLines={1}>{prop.file.name}</Text>
+                                            <TouchableOpacity onPress={() => removeFileFromProperty(prop.id)} style={{padding: 4, marginLeft: 8}}><X size={16} color={colors.red500} /></TouchableOpacity>
+                                        </View>
+                                    </View>
+                                )}
+                                {/* --- END OF UI IMPROVEMENT --- */}
                             </View>
                         ))}
-                        <TouchableOpacity onPress={handleSaveOnBack} style={[AppStyles.btnPrimary, AppStyles.btnFull, AppStyles.btnFlexCenter, { marginTop: 8 }]}>
+                        
+                        <TouchableOpacity onPress={handleSaveOnBack} style={[AppStyles.btnPrimary, AppStyles.btnFull, AppStyles.btnFlexCenter, { marginTop: 16 }]}>
                             <Text style={AppStyles.btnPrimaryText}>Opslaan</Text>
                         </TouchableOpacity>
                     </View>
