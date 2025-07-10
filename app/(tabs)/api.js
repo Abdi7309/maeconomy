@@ -139,10 +139,8 @@ export const handleAddObject = async (parentPath, newObjectData, userToken) => {
     }
 };
 
-
-// --- FIX: This is the function your index.js is looking for, now with file upload support ---
 /**
- * Adds multiple properties, each potentially with a file.
+ * Adds multiple properties, each potentially with multiple files.
  * @param {string} objectId - The ID of the object to add properties to.
  * @param {Array} properties - An array of property objects from the state.
  * @returns {Promise<boolean>}
@@ -156,19 +154,24 @@ export const addProperties = async (objectId, properties) => {
             formData.append('name', prop.name.trim());
             formData.append('waarde', prop.value.trim());
 
-            // Check if there's a file for this specific property and append it.
-            if (prop.file) {
-                if (Platform.OS === 'web') {
-                    // On web, we have the original File object stored in _webFile
-                    formData.append('file', prop.file._webFile, prop.file.name);
-                } else {
-                    // On native, we use the { uri, type, name } structure
-                    formData.append('file', {
-                        uri: prop.file.uri,
-                        type: prop.file.mimeType,
-                        name: prop.file.name,
-                    });
-                }
+            // Check if there's a files array and it's not empty.
+            if (prop.files && prop.files.length > 0) {
+                // Loop through the files array for this property.
+                prop.files.forEach(file => {
+                    // Append each file using 'files[]' as the key.
+                    // This is crucial for the PHP backend to recognize it as an array.
+                    if (Platform.OS === 'web') {
+                        // On web, we have the original File object stored in _webFile
+                        formData.append('files[]', file._webFile, file.name);
+                    } else {
+                        // On native, we use the { uri, type, name } structure
+                        formData.append('files[]', {
+                            uri: file.uri,
+                            type: file.mimeType,
+                            name: file.name,
+                        });
+                    }
+                });
             }
 
             // Send one request per property.

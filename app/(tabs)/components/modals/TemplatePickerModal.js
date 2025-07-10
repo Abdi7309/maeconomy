@@ -1,7 +1,8 @@
-import { View, Text, Modal, TouchableOpacity, ScrollView } from 'react-native';
-import AppStyles from '../../AppStyles';
+import { Plus } from 'lucide-react-native';
+import { Modal, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import AppStyles, { colors } from '../../AppStyles';
 
-const TemplatePickerModal = ({ visible, onClose, templates, onSelect }) => {
+const TemplatePickerModal = ({ visible, onClose, templates, onSelect, onAddNewTemplate }) => {
     return (
         <Modal
             transparent={true}
@@ -22,6 +23,20 @@ const TemplatePickerModal = ({ visible, onClose, templates, onSelect }) => {
                             </TouchableOpacity>
                         ))}
                     </ScrollView>
+
+                    {/* --- START: Added Button --- */}
+                    <View style={{borderTopWidth: 1, borderColor: colors.lightGray100, marginVertical: 8, marginHorizontal: -16}} />
+                    <TouchableOpacity
+                        style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12 }}
+                        onPress={onAddNewTemplate}
+                    >
+                        <Plus color={colors.blue600} size={20} style={{ marginRight: 8 }} />
+                        <Text style={{ color: colors.blue600, fontWeight: '600', fontSize: 15 }}>
+                            Nieuw Sjabloon
+                        </Text>
+                    </TouchableOpacity>
+                    {/* --- END: Added Button --- */}
+
                 </View>
             </TouchableOpacity>
         </Modal>

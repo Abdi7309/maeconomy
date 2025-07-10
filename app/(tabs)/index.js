@@ -14,11 +14,13 @@ import {
     handleAddObject as apiAddObject,
     addProperties as apiAddProperties
 } from './api';
+import AsyncStorage from '@react-native-async-storage/async-storage'; // --- 1. IMPORT ASYNCSTORAGE ---
 
 const App = () => {
     const [userToken, setUserToken] = useState(null);
     const [currentView, setCurrentView] = useState('login');
     const [isLoading, setIsLoading] = useState(false);
+    const [isAppLoading, setIsAppLoading] = useState(true); // --- 2. ADD APP LOADING STATE ---
     const [authError, setAuthError] = useState('');
     const [currentScreen, setCurrentScreen] = useState('objects');
     const [selectedProperty, setSelectedProperty] = useState(null);
@@ -29,6 +31,26 @@ const App = () => {
     const [allUsers, setAllUsers] = useState([]);
     const [totalObjectCount, setTotalObjectCount] = useState(0);
     const [filterOption, setFilterOption] = useState(null);
+
+    // --- 3. ADD EFFECT TO CHECK STORAGE ON APP START ---
+    useEffect(() => {
+        const loadUserFromStorage = async () => {
+            try {
+                const storedUserToken = await AsyncStorage.getItem('userToken');
+                if (storedUserToken) {
+                    setUserToken(JSON.parse(storedUserToken));
+                    setFilterOption('all'); // Set default filter
+                    await handleFetchUsers(); // Fetch initial data
+                    await handleFetchTemplates();
+                }
+            } catch (error) {
+                console.error("Failed to load user from storage", error);
+            } finally {
+                setIsAppLoading(false);
+            }
+        };
+        loadUserFromStorage();
+    }, []);
 
     useEffect(() => {
         if (userToken) {
@@ -49,11 +71,20 @@ const App = () => {
         setAuthError('');
         const result = await apiLogin(username, password);
         if (result && result.success) {
-            setUserToken(result.user.id);
+            const userId = result.user.id;
+            setUserToken(userId);
             setFilterOption('all');
             setCurrentView('app');
             await handleFetchUsers();
             await handleFetchTemplates();
+
+            // --- 4. SAVE USER TOKEN ON LOGIN ---
+            try {
+                await AsyncStorage.setItem('userToken', JSON.stringify(userId));
+            } catch (error) {
+                console.error("Failed to save user token to storage", error);
+            }
+
         } else {
             setAuthError(result ? result.message : 'An error occurred during login.');
         }
@@ -73,7 +104,7 @@ const App = () => {
         setIsLoading(false);
     };
 
-    const handleLogout = () => {
+    const handleLogout = async () => { // --- 5. MAKE LOGOUT ASYNC ---
         setUserToken(null);
         setCurrentView('login');
         setObjectsHierarchy([]);
@@ -81,6 +112,13 @@ const App = () => {
         setAllUsers([]);
         setFilterOption(null);
         setTotalObjectCount(0);
+
+        // --- 6. CLEAR USER TOKEN ON LOGOUT ---
+        try {
+            await AsyncStorage.removeItem('userToken');
+        } catch (error) {
+            console.error("Failed to remove user token from storage", error);
+        }
     };
 
     const handleFetchObjects = async (isRefreshing = false) => {
@@ -109,6 +147,8 @@ const App = () => {
         handleFetchTemplates();
         handleFetchUsers();
     };
+
+
 
     const handleAddObject = async (parentPath, newObjectData) => {
         const success = await apiAddObject(parentPath, newObjectData, userToken);
@@ -144,6 +184,11 @@ const App = () => {
     };
 
     const renderContent = () => {
+        // --- 7. ADD INITIAL LOADING INDICATOR ---
+        if (isAppLoading) {
+            return <View style={{flex: 1, justifyContent: 'center', alignItems: 'center'}}><ActivityIndicator size="large" color={colors.blue600} /></View>;
+        }
+
         if (!userToken) {
             return (
                 <AuthScreen 
@@ -195,6 +240,7 @@ const App = () => {
                         refreshing={refreshing}
                         findItemByPath={findItemByPath}
                     />
+
                 );
             case 'addProperty':
                 return (

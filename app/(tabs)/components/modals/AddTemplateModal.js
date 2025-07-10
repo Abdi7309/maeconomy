@@ -1,10 +1,10 @@
-import { X } from 'lucide-react-native';
+import { X, Plus } from 'lucide-react-native';
 import { useState } from 'react';
 import { Alert, Dimensions, KeyboardAvoidingView, Modal, Platform, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import AppStyles, { colors } from '../../AppStyles';
-import CONFIG from '../../config/config'; // <-- Import config
+import CONFIG from '../../config/config';
 
-const API_BASE_URL = CONFIG.API_BASE_URL; // <-- Use config
+const API_BASE_URL = CONFIG.API_BASE_URL;
 
 const AddTemplateModal = ({ visible, onClose, onTemplateSaved }) => {
     const [templateName, setTemplateName] = useState('');
@@ -72,26 +72,72 @@ const AddTemplateModal = ({ visible, onClose, onTemplateSaved }) => {
             <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={AppStyles.modalBackdrop}>
                 <View style={[AppStyles.modalContent, { maxWidth: '90%', width: '90%' }]}>
                     <Text style={AppStyles.modalTitle}>Nieuw Sjabloon Toevoegen</Text>
-                    <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.6 }}>
+                    <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.6 }} keyboardShouldPersistTaps="handled">
                         <View style={AppStyles.formGroup}>
                             <Text style={AppStyles.formLabel}>Sjabloonnaam</Text>
                             <TextInput placeholder="Bijv. Standaard woning" value={templateName} onChangeText={setTemplateName} style={AppStyles.formInput} />
                         </View>
                         <Text style={[AppStyles.formLabel, { marginTop: 16, marginBottom: 8 }]}>Sjablooneigenschappen</Text>
+                        
                         {templateProperties.map((prop, idx) => (
-                            <View key={idx} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                                <TextInput style={[AppStyles.formInput, { flex: 1, marginRight: 8 }]} placeholder="Naam" value={prop.name} onChangeText={(text) => handlePropertyChange(idx, 'name', text)} />
-                                <TextInput style={[AppStyles.formInput, { flex: 1, marginRight: 8 }]} placeholder="Waarde (optioneel)" value={prop.value} onChangeText={(text) => handlePropertyChange(idx, 'value', text)} />
-                                {(templateProperties.length > 1) && (
-                                    <TouchableOpacity onPress={() => handleRemoveProperty(idx)} style={{ padding: 4 }}>
-                                        <X color={colors.red500} size={20} />
-                                    </TouchableOpacity>
-                                )}
-                            </View>
+                            // --- START: Platform-specific layout for properties ---
+                            Platform.OS === 'web' ? (
+                                <View key={idx} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                                    <TextInput style={[AppStyles.formInput, { flex: 1, marginRight: 8 }]} placeholder="Naam" value={prop.name} onChangeText={(text) => handlePropertyChange(idx, 'name', text)} />
+                                    <TextInput style={[AppStyles.formInput, { flex: 1, marginRight: 8 }]} placeholder="Waarde (optioneel)" value={prop.value} onChangeText={(text) => handlePropertyChange(idx, 'value', text)} />
+                                    {(templateProperties.length > 1 || prop.name || prop.value) && (
+                                        <TouchableOpacity onPress={() => handleRemoveProperty(idx)} style={{ padding: 4 }}>
+                                            <X color={colors.red500} size={20} />
+                                        </TouchableOpacity>
+                                    )}
+                                </View>
+                            ) : (
+                                <View key={idx} style={{ borderWidth: 1, borderColor: colors.lightGray100, borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                                    <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4}}>
+                                        <Text style={[AppStyles.formLabel, {color: colors.lightGray500}]}>Eigenschap #{idx + 1}</Text>
+                                        {(templateProperties.length > 1 || prop.name || prop.value) && (
+                                            <TouchableOpacity onPress={() => handleRemoveProperty(idx)} style={{ padding: 4 }}>
+                                                <X color={colors.red500} size={20} />
+                                            </TouchableOpacity>
+                                        )}
+                                    </View>
+                                    <View style={[AppStyles.formGroup, {marginBottom: 8}]}>
+                                        <Text style={AppStyles.formLabel}>Naam</Text>
+                                        <TextInput style={AppStyles.formInput} placeholder="Eigenschap naam" value={prop.name} onChangeText={(text) => handlePropertyChange(idx, 'name', text)} />
+                                    </View>
+                                    <View style={[AppStyles.formGroup, {marginBottom: 0}]}>
+                                        <Text style={AppStyles.formLabel}>Standaard Waarde</Text>
+                                        <TextInput style={AppStyles.formInput} placeholder="Optioneel" value={prop.value} onChangeText={(text) => handlePropertyChange(idx, 'value', text)} />
+                                    </View>
+                                </View>
+                            )
+                            // --- END: Platform-specific layout ---
                         ))}
-                        <TouchableOpacity onPress={handleAddProperty} style={[AppStyles.btnSecondary, { alignSelf: 'flex-start', marginBottom: 12 }]}>
-                            <Text style={AppStyles.btnSecondaryText}>+ Eigenschap toevoegen</Text>
+
+                        {/* --- START: Redesigned Add Button --- */}
+                        <TouchableOpacity
+                            onPress={handleAddProperty}
+                            style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                padding: 12,
+                                backgroundColor: colors.lightGray50,
+                                borderRadius: 8,
+                                borderWidth: 1,
+                                borderColor: colors.lightGray200,
+                                borderStyle: 'dashed',
+                                marginTop: 8,
+                                marginBottom: 20
+                            }}
+                        >
+                            <Plus color={colors.lightGray500} size={18} style={{ marginRight: 8 }} />
+                            <Text style={{ color: colors.lightGray700, fontWeight: '600' }}>
+                                Nog een Eigenschap Toevoegen
+                            </Text>
                         </TouchableOpacity>
+                        {/* --- END: Redesigned Add Button --- */}
+                        
                         {error ? <Text style={{ color: colors.red500, marginBottom: 8, textAlign: 'center' }}>{error}</Text> : null}
                         <View style={AppStyles.modalActions}>
                             <TouchableOpacity style={[AppStyles.btnSecondary, AppStyles.btnPrimaryModal]} onPress={onClose}>

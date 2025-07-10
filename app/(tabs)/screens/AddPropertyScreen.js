@@ -22,33 +22,44 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
     const [showTemplatePickerModal, setShowTemplatePickerModal] = useState(false);
     const [showAddTemplateModal, setShowAddTemplateModal] = useState(false);
 
-    // --- FUNCTION DEFINITIONS ---
-    // Ensure all these functions are here, directly inside the component.
+    const addNewPropertyField = () => {
+        setNewPropertiesList(prevList => {
+            const newField = { id: nextNewPropertyId, name: '', value: '', files: [] };
+            setNextNewPropertyId(prevId => prevId + 1);
+            return [...prevList, newField];
+        });
+    };
 
-    const updateFileForProperty = (propertyId, fileObject) => {
+    const addFileToProperty = (propertyId, fileObject) => {
         setNewPropertiesList(prevList =>
             prevList.map(prop =>
-                prop.id === propertyId ? { ...prop, file: fileObject } : prop
+                prop.id === propertyId
+                    ? { ...prop, files: [...prop.files, fileObject] }
+                    : prop
+            )
+        );
+    };
+
+    const removeFileFromProperty = (propertyId, fileIndexToRemove) => {
+         setNewPropertiesList(prevList =>
+            prevList.map(prop =>
+                prop.id === propertyId
+                    ? { ...prop, files: prop.files.filter((_, index) => index !== fileIndexToRemove) }
+                    : prop
             )
         );
     };
     
-    const removeFileFromProperty = (propertyId) => {
-         setNewPropertiesList(prevList =>
-            prevList.map(prop =>
-                prop.id === propertyId ? { ...prop, file: null } : prop
-            )
-        );
-    };
-
     const pickDocument = async (propertyId) => {
         try {
-            const result = await DocumentPicker.getDocumentAsync({ type: '*/*' });
+            const result = await DocumentPicker.getDocumentAsync({ type: '*/*', multiple: true });
             if (!result.canceled) {
-                updateFileForProperty(propertyId, result.assets[0]);
+                result.assets.forEach(file => {
+                    addFileToProperty(propertyId, file);
+                });
             }
         } catch (err) {
-            Alert.alert('Error', 'An error occurred while picking the file.');
+            Alert.alert('Error', 'An error occurred while picking files.');
             console.error('Document Picker Error:', err);
         }
     };
@@ -59,13 +70,8 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
             Alert.alert('Permission Denied', 'Camera access is required to take photos.');
             return;
         }
-
         try {
-            const result = await ImagePicker.launchCameraAsync({
-                allowsEditing: true,
-                quality: 0.7,
-            });
-
+            const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.7 });
             if (!result.canceled) {
                 const asset = result.assets[0];
                 const fileObject = {
@@ -74,14 +80,14 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                     mimeType: asset.mimeType,
                     size: asset.fileSize,
                 };
-                updateFileForProperty(propertyId, fileObject);
+                addFileToProperty(propertyId, fileObject);
             }
         } catch (err) {
             Alert.alert('Error', 'An error occurred while opening the camera.');
             console.error('Image Picker Error:', err);
         }
     };
-
+    
     const handleSelectFile = async (propertyId) => {
         if (Platform.OS === 'web') {
             webInputRef.current.setAttribute('data-property-id', propertyId);
@@ -101,27 +107,20 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
     };
 
     const handleWebFileSelect = (event) => {
-        if (event.target.files && event.target.files[0]) {
-            const webFile = event.target.files[0];
+        if (event.target.files && event.target.files.length > 0) {
             const propertyId = parseInt(webInputRef.current.getAttribute('data-property-id'), 10);
             
-            const fileObject = {
-                name: webFile.name,
-                size: webFile.size,
-                type: webFile.type,
-                uri: URL.createObjectURL(webFile),
-                _webFile: webFile
-            };
-            updateFileForProperty(propertyId, fileObject);
+            for (const webFile of event.target.files) {
+                const fileObject = {
+                    name: webFile.name,
+                    size: webFile.size,
+                    type: webFile.type,
+                    uri: URL.createObjectURL(webFile),
+                    _webFile: webFile
+                };
+                addFileToProperty(propertyId, fileObject);
+            }
         }
-    };
-
-    const addNewPropertyField = () => {
-        setNewPropertiesList(prevList => {
-            const newField = { id: nextNewPropertyId, name: '', value: '', file: null };
-            setNextNewPropertyId(prevId => prevId + 1);
-            return [...prevList, newField];
-        });
     };
 
     const removePropertyField = (idToRemove) => {
@@ -145,7 +144,6 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
             setCurrentScreen('properties');
             return;
         }
-
         const success = await onSave(objectIdForProperties, validPropertiesToSave);
 
         if (success) {
@@ -163,7 +161,12 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
         return <Tag color={customColor} size={20} />;
     };
 
-    // --- JSX RENDER ---
+    const handleClearTemplate = () => {
+        setSelectedTemplateForPropertyAdd(null);
+        setNewPropertiesList([]);
+        setTimeout(() => addNewPropertyField(), 0);
+    }
+
     return (
         <View style={[AppStyles.screen, { backgroundColor: colors.white, flex: 1 }]}>
             {Platform.OS === 'web' && (
@@ -172,6 +175,7 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                     ref={webInputRef}
                     style={{ display: 'none' }}
                     onChange={handleWebFileSelect}
+                    multiple
                 />
             )}
             <StatusBar barStyle="dark-content" />
@@ -181,18 +185,21 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                 onClose={() => setShowTemplatePickerModal(false)}
                 templates={fetchedTemplates}
                 onSelect={(templateId) => {
-                    setSelectedTemplateForPropertyAdd(templateId);
                     if (templateId && fetchedTemplates[templateId]) {
                         const templateProps = fetchedTemplates[templateId].properties.map((prop, index) => ({
-                            id: index, name: prop.name, value: prop.value || '', file: null
+                            id: index, name: prop.name, value: prop.value || '', files: []
                         }));
                         setNewPropertiesList(templateProps);
                         setNextNewPropertyId(templateProps.length);
+                        setSelectedTemplateForPropertyAdd(templateId);
                     } else {
-                        setNewPropertiesList([]);
-                        setNextNewPropertyId(0);
+                        handleClearTemplate();
                     }
                     setShowTemplatePickerModal(false);
+                }}
+                onAddNewTemplate={() => {
+                    setShowTemplatePickerModal(false);
+                    setShowAddTemplateModal(true);
                 }}
             />}
 
@@ -240,7 +247,7 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                         <Text style={[AppStyles.infoItemValue, { marginBottom: 16, fontSize: 16, fontWeight: '600' }]}>
                             Nieuwe Eigenschappen
                         </Text>
-
+                        
                         <View style={AppStyles.formGroup}>
                             <Text style={AppStyles.formLabel}>Kies een sjabloon (optioneel)</Text>
                             <TouchableOpacity onPress={() => setShowTemplatePickerModal(true)} style={[AppStyles.formInput, { justifyContent: 'center' }]}>
@@ -249,39 +256,51 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                 </Text>
                             </TouchableOpacity>
                         </View>
-                        <TouchableOpacity
-                            onPress={() => setShowAddTemplateModal(true)}
-                            style={[AppStyles.btnSecondary, { marginBottom: 16, alignSelf: 'center' }]}
-                        >
-                            <Text style={AppStyles.btnSecondaryText}>+ Nieuw sjabloon toevoegen</Text>
-                        </TouchableOpacity>
 
-                        {Platform.OS === 'web' && (
-                            <View style={[AppStyles.formRow, { marginBottom: 4 }]}>
-                                <View style={[AppStyles.formGroupHalf, { marginRight: 8 }]}><Text style={AppStyles.formLabel}>Eigenschap Naam</Text></View>
-                                <View style={[AppStyles.formGroupHalf, { marginLeft: 8 }]}><Text style={AppStyles.formLabel}>Waarde</Text></View>
-                            </View>
-                        )}
+                        <View style={{flexDirection: 'row', alignItems: 'center', marginVertical: 16}}>
+                          <View style={{flex: 1, height: 1, backgroundColor: colors.lightGray200}} />
+                          <View>
+                            <Text style={{width: 150, textAlign: 'center', color: colors.lightGray400}}>Handmatig Toevoegen</Text>
+                          </View>
+                          <View style={{flex: 1, height: 1, backgroundColor: colors.lightGray200}} />
+                        </View>
 
                         {newPropertiesList.map((prop, index) => (
                             <View key={prop.id} style={{ marginBottom: 16, borderTopWidth: index > 0 ? 1 : 0, borderColor: colors.lightGray100, paddingTop: index > 0 ? 16 : 0 }}>
                                 
                                 {Platform.OS === 'web' ? (
+                                    // WEB LAYOUT: SIDE-BY-SIDE
                                     <View>
-                                        <View style={[AppStyles.formRow, { alignItems: 'center', marginBottom: 12 }]}>
-                                            <View style={[AppStyles.formGroupHalf, { marginRight: 8, marginBottom: 0 }]}>
-                                                <TextInput placeholder="Bijv. Gewicht" value={prop.name} onChangeText={(text) => handlePropertyFieldChange(prop.id, 'name', text)} style={AppStyles.formInput} />
+                                        {index === 0 && (
+                                            <View style={{ flexDirection: 'row', marginBottom: 4 }}>
+                                                <View style={{ flex: 1, marginRight: 8 }}><Text style={AppStyles.formLabel}>Eigenschap Naam</Text></View>
+                                                <View style={{ flex: 1, marginLeft: 8 }}><Text style={AppStyles.formLabel}>Waarde</Text></View>
                                             </View>
-                                            <View style={[AppStyles.formGroupHalf, { marginLeft: 8, marginBottom: 0, flexDirection: 'row', alignItems: 'center' }]}>
-                                                <TextInput placeholder="Bijv. 2kg" value={prop.value} onChangeText={(text) => handlePropertyFieldChange(prop.id, 'value', text)} style={[AppStyles.formInput, { flex: 1 }]} />
-                                                <TouchableOpacity onPress={() => handleSelectFile(prop.id)} style={{ paddingLeft: 8, paddingVertical: 4 }}>
-                                                    <Paperclip color={prop.file ? colors.blue600 : colors.lightGray500} size={22} />
-                                                </TouchableOpacity>
-                                                {(newPropertiesList.length > 1) && (<TouchableOpacity onPress={() => removePropertyField(prop.id)} style={{ paddingLeft: 4, paddingVertical: 4 }}><X color={colors.red600} size={20} /></TouchableOpacity>)}
-                                            </View>
+                                        )}
+                                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                            <TextInput
+                                                placeholder="Bijv. Gewicht"
+                                                value={prop.name}
+                                                onChangeText={(text) => handlePropertyFieldChange(prop.id, 'name', text)}
+                                                style={[AppStyles.formInput, { flex: 1, marginRight: 8 }]}
+                                            />
+                                            <TextInput
+                                                placeholder="Bijv. 2kg"
+                                                value={prop.value}
+                                                onChangeText={(text) => handlePropertyFieldChange(prop.id, 'value', text)}
+                                                style={[AppStyles.formInput, { flex: 1, marginLeft: 8 }]}
+                                            />
+                                        </View>
+                                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+                                            <TouchableOpacity onPress={() => handleSelectFile(prop.id)} style={{ flexDirection: 'row', alignItems: 'center', padding: 8, backgroundColor: colors.lightGray100, borderRadius: 8, alignSelf: 'flex-start' }}>
+                                                <Paperclip color={colors.blue600} size={18} />
+                                                <Text style={{ marginLeft: 8, color: colors.lightGray700, fontWeight: '500' }}>Bestand bijvoegen</Text>
+                                            </TouchableOpacity>
+                                            {(newPropertiesList.length > 1) && (<TouchableOpacity onPress={() => removePropertyField(prop.id)} style={{ padding: 8 }}><X color={colors.red600} size={20} /></TouchableOpacity>)}
                                         </View>
                                     </View>
                                 ) : (
+                                    // NATIVE LAYOUT: STACKED
                                     <View>
                                         <View style={AppStyles.formGroup}>
                                             <Text style={AppStyles.formLabel}>Eigenschap Naam</Text>
@@ -294,20 +313,25 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
                                             <TouchableOpacity onPress={() => handleSelectFile(prop.id)} style={{ flexDirection: 'row', alignItems: 'center', padding: 8, backgroundColor: colors.lightGray100, borderRadius: 8, alignSelf: 'flex-start' }}>
                                                 <Paperclip color={colors.blue600} size={18} />
-                                                <Text style={{ marginLeft: 8, color: colors.lightGray700, fontWeight: '500' }}>{prop.file ? 'Bestand wijzigen' : 'Bestand bijvoegen'}</Text>
+                                                <Text style={{ marginLeft: 8, color: colors.lightGray700, fontWeight: '500' }}>Bestand bijvoegen</Text>
                                             </TouchableOpacity>
                                             {(newPropertiesList.length > 1) && (<TouchableOpacity onPress={() => removePropertyField(prop.id)} style={{ padding: 8 }}><X color={colors.red600} size={20} /></TouchableOpacity>)}
                                         </View>
                                     </View>
                                 )}
-                                {prop.file && (
+
+                                {prop.files && prop.files.length > 0 && (
                                     <View style={{marginTop: 12}}>
-                                        <Text style={[AppStyles.formLabel, {marginBottom: 4}]}>Bijlage</Text>
-                                        <View style={{flexDirection: 'row', alignItems: 'center', backgroundColor: colors.lightGray50, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 6, borderWidth: 1, borderColor: colors.lightGray200}}>
-                                            <FileText size={18} color={colors.lightGray600} />
-                                            <Text style={{flex: 1, marginLeft: 12, color: colors.lightGray700}} numberOfLines={1}>{prop.file.name}</Text>
-                                            <TouchableOpacity onPress={() => removeFileFromProperty(prop.id)} style={{padding: 4, marginLeft: 8}}><X size={16} color={colors.red500} /></TouchableOpacity>
-                                        </View>
+                                        <Text style={[AppStyles.formLabel, {marginBottom: 4}]}>Bijlagen</Text>
+                                        {prop.files.map((file, fileIndex) => (
+                                            <View key={fileIndex} style={{flexDirection: 'row', alignItems: 'center', backgroundColor: colors.lightGray50, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 6, borderWidth: 1, borderColor: colors.lightGray200, marginBottom: 8}}>
+                                                <FileText size={18} color={colors.lightGray600} />
+                                                <Text style={{flex: 1, marginLeft: 12, color: colors.lightGray700}} numberOfLines={1}>{file.name}</Text>
+                                                <TouchableOpacity onPress={() => removeFileFromProperty(prop.id, fileIndex)} style={{padding: 4, marginLeft: 8}}>
+                                                    <X size={16} color={colors.red500} />
+                                                </TouchableOpacity>
+                                            </View>
+                                        ))}
                                     </View>
                                 )}
                             </View>
