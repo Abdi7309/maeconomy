@@ -5,8 +5,7 @@ import AppStyles, { colors } from '../AppStyles';
 import AddTemplateModal from '../components/modals/AddTemplateModal';
 import TemplatePickerModal from '../components/modals/TemplatePickerModal';
 import * as DocumentPicker from 'expo-document-picker';
-// The onSave prop from index.js will call addProperties from api.js
-// so we don't need a direct import here.
+import * as ImagePicker from 'expo-image-picker';
 
 const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, setCurrentScreen, onSave, onTemplateAdded, findItemByPath }) => {
 
@@ -23,8 +22,98 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
     const [showTemplatePickerModal, setShowTemplatePickerModal] = useState(false);
     const [showAddTemplateModal, setShowAddTemplateModal] = useState(false);
 
-    const renderIcon = (customColor = colors.lightGray500) => {
-        return <Tag color={customColor} size={20} />;
+    // --- FUNCTION DEFINITIONS ---
+    // Ensure all these functions are here, directly inside the component.
+
+    const updateFileForProperty = (propertyId, fileObject) => {
+        setNewPropertiesList(prevList =>
+            prevList.map(prop =>
+                prop.id === propertyId ? { ...prop, file: fileObject } : prop
+            )
+        );
+    };
+    
+    const removeFileFromProperty = (propertyId) => {
+         setNewPropertiesList(prevList =>
+            prevList.map(prop =>
+                prop.id === propertyId ? { ...prop, file: null } : prop
+            )
+        );
+    };
+
+    const pickDocument = async (propertyId) => {
+        try {
+            const result = await DocumentPicker.getDocumentAsync({ type: '*/*' });
+            if (!result.canceled) {
+                updateFileForProperty(propertyId, result.assets[0]);
+            }
+        } catch (err) {
+            Alert.alert('Error', 'An error occurred while picking the file.');
+            console.error('Document Picker Error:', err);
+        }
+    };
+
+    const takePhoto = async (propertyId) => {
+        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        if (status !== 'granted') {
+            Alert.alert('Permission Denied', 'Camera access is required to take photos.');
+            return;
+        }
+
+        try {
+            const result = await ImagePicker.launchCameraAsync({
+                allowsEditing: true,
+                quality: 0.7,
+            });
+
+            if (!result.canceled) {
+                const asset = result.assets[0];
+                const fileObject = {
+                    name: asset.fileName || `photo_${Date.now()}.jpg`,
+                    uri: asset.uri,
+                    mimeType: asset.mimeType,
+                    size: asset.fileSize,
+                };
+                updateFileForProperty(propertyId, fileObject);
+            }
+        } catch (err) {
+            Alert.alert('Error', 'An error occurred while opening the camera.');
+            console.error('Image Picker Error:', err);
+        }
+    };
+
+    const handleSelectFile = async (propertyId) => {
+        if (Platform.OS === 'web') {
+            webInputRef.current.setAttribute('data-property-id', propertyId);
+            webInputRef.current.click();
+        } else {
+            Alert.alert(
+                'Add Attachment',
+                'Choose a source for your file:',
+                [
+                    { text: 'Take Photo...', onPress: () => takePhoto(propertyId) },
+                    { text: 'Choose from Library...', onPress: () => pickDocument(propertyId) },
+                    { text: 'Cancel', style: 'cancel' },
+                ],
+                { cancelable: true }
+            );
+        }
+    };
+
+    const handleWebFileSelect = (event) => {
+        if (event.target.files && event.target.files[0]) {
+            const webFile = event.target.files[0];
+            const propertyId = parseInt(webInputRef.current.getAttribute('data-property-id'), 10);
+            
+            const fileObject = {
+                name: webFile.name,
+                size: webFile.size,
+                type: webFile.type,
+                uri: URL.createObjectURL(webFile),
+                _webFile: webFile
+            };
+            updateFileForProperty(propertyId, fileObject);
+        }
     };
 
     const addNewPropertyField = () => {
@@ -47,62 +136,6 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
         });
     };
 
-    useEffect(() => {
-        if (newPropertiesList.length === 0) {
-            addNewPropertyField();
-        }
-    }, [newPropertiesList]);
-
-    const handleSelectFile = async (propertyId) => {
-        if (Platform.OS === 'web') {
-            webInputRef.current.setAttribute('data-property-id', propertyId);
-            webInputRef.current.click();
-        } else {
-            try {
-                const result = await DocumentPicker.getDocumentAsync({ type: '*/*' });
-                if (!result.canceled) {
-                    const file = result.assets[0];
-                    updateFileForProperty(propertyId, file);
-                }
-            } catch (err) {
-                Alert.alert('Error', 'An error occurred while picking the file.');
-                console.error('Document Picker Error:', err);
-            }
-        }
-    };
-
-    const handleWebFileSelect = (event) => {
-        if (event.target.files && event.target.files[0]) {
-            const webFile = event.target.files[0];
-            const propertyId = parseInt(webInputRef.current.getAttribute('data-property-id'), 10);
-            
-            const fileObject = {
-                name: webFile.name,
-                size: webFile.size,
-                type: webFile.type,
-                uri: URL.createObjectURL(webFile),
-                _webFile: webFile
-            };
-            updateFileForProperty(propertyId, fileObject);
-        }
-    };
-    
-    const updateFileForProperty = (propertyId, fileObject) => {
-        setNewPropertiesList(prevList =>
-            prevList.map(prop =>
-                prop.id === propertyId ? { ...prop, file: fileObject } : prop
-            )
-        );
-    };
-
-    const removeFileFromProperty = (propertyId) => {
-         setNewPropertiesList(prevList =>
-            prevList.map(prop =>
-                prop.id === propertyId ? { ...prop, file: null } : prop
-            )
-        );
-    };
-
     const handleSaveOnBack = async () => {
         const validPropertiesToSave = newPropertiesList.filter(prop =>
             prop.name.trim() !== ''
@@ -113,15 +146,24 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
             return;
         }
 
-        // This calls the `handleAddProperties` function from your index.js
         const success = await onSave(objectIdForProperties, validPropertiesToSave);
 
         if (success) {
-            // The refresh is handled by the parent (index.js)
             setCurrentScreen('properties');
         }
     };
 
+    useEffect(() => {
+        if (newPropertiesList.length === 0) {
+            addNewPropertyField();
+        }
+    }, [newPropertiesList]);
+
+    const renderIcon = (customColor = colors.lightGray500) => {
+        return <Tag color={customColor} size={20} />;
+    };
+
+    // --- JSX RENDER ---
     return (
         <View style={[AppStyles.screen, { backgroundColor: colors.white, flex: 1 }]}>
             {Platform.OS === 'web' && (
@@ -170,9 +212,6 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                             <ChevronLeft color={colors.lightGray700} size={24} />
                         </TouchableOpacity>
                         <Text style={AppStyles.headerTitleLg}>Eigenschap Toevoegen</Text>
-                        <TouchableOpacity onPress={handleSaveOnBack} style={[AppStyles.headerBackButton, {marginRight: 0, marginLeft: 16}]}>
-                            <Text style={{color: colors.blue600, fontWeight: '600'}}>Opslaan</Text>
-                        </TouchableOpacity>
                     </View>
                 </View>
                 <ScrollView
@@ -261,9 +300,6 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                         </View>
                                     </View>
                                 )}
-
-                                {/* --- START OF UI IMPROVEMENT --- */}
-                                {/* This replaces the simple "Geselecteerd: ..." text */}
                                 {prop.file && (
                                     <View style={{marginTop: 12}}>
                                         <Text style={[AppStyles.formLabel, {marginBottom: 4}]}>Bijlage</Text>
@@ -274,7 +310,6 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                         </View>
                                     </View>
                                 )}
-                                {/* --- END OF UI IMPROVEMENT --- */}
                             </View>
                         ))}
                         
