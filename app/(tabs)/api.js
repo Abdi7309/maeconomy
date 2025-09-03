@@ -194,3 +194,5 @@ export const addProperties = async (objectId, properties) => {
         return false;
     }
 };
+
+export default () => null;
