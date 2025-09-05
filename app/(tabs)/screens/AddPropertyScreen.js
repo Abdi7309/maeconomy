@@ -330,7 +330,7 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                         onPress={() => removePropertyField(prop.id)}
                                         style={{
                                             position: 'absolute',
-                                            top: index === 0 ? -12 : 5,
+                                            top: index === 0 ? -12 : 14,
                                             right: 0,
                                             zIndex: 1,
                                             padding: 8,
