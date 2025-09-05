@@ -1,6 +1,6 @@
+import { ChevronRight, Filter, LogOut, Plus } from 'lucide-react-native';
 import { useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, RefreshControl, StatusBar } from 'react-native';
-import { ChevronRight, Plus, Filter } from 'lucide-react-native';
+import { RefreshControl, ScrollView, StatusBar, Text, TouchableOpacity, View } from 'react-native';
 import AppStyles, { colors } from '../AppStyles';
 import AddObjectModal from '../components/modals/AddObjectModal';
 import FilterModal from '../components/modals/FilterModal';
@@ -77,7 +77,7 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                         ))}
                     </ScrollView>
                     <TouchableOpacity onPress={handleLogout} style={{ padding: 8 }}>
-                       <Text style={{color: colors.blue600}}>Logout</Text>
+                        <LogOut color={colors.blue600} size={24} />
                     </TouchableOpacity>
                 </View>
             </View>
