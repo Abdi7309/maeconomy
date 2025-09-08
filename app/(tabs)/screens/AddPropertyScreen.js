@@ -161,12 +161,29 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
 
     const handlePropertyFieldChange = (idToUpdate, field, value) => {
         setNewPropertiesList(prevList => {
-            return prevList.map(prop => {
+            // first update the changed field
+            let updatedList = prevList.map(prop => {
                 if (prop.id === idToUpdate) {
                     return { ...prop, [field]: value };
                 }
                 return prop;
             });
+
+            // build properties map from current values
+            const propertiesMap = buildPropertiesMap(updatedList);
+
+            // recalc any formulas in values
+            updatedList = updatedList.map(prop => {
+                if (prop.value && /[+\-*/]/.test(prop.value)) {
+                    const result = evaluateFormula(prop.value, propertiesMap);
+                    if (result !== null) {
+                        return { ...prop, value: result.toString() };
+                    }
+                }
+                return prop;
+            });
+
+            return updatedList;
         });
     };
 
