@@ -160,31 +160,13 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
     };
 
     const handlePropertyFieldChange = (idToUpdate, field, value) => {
-        setNewPropertiesList(prevList => {
-            // first update the changed field
-            let updatedList = prevList.map(prop => {
-                if (prop.id === idToUpdate) {
-                    return { ...prop, [field]: value };
-                }
-                return prop;
-            });
-
-            // build properties map from current values
-            const propertiesMap = buildPropertiesMap(updatedList);
-
-            // recalc any formulas in values
-            updatedList = updatedList.map(prop => {
-                if (prop.value && /[+\-*/]/.test(prop.value)) {
-                    const result = evaluateFormula(prop.value, propertiesMap);
-                    if (result !== null) {
-                        return { ...prop, value: result.toString() };
-                    }
-                }
-                return prop;
-            });
-
-            return updatedList;
-        });
+        setNewPropertiesList(prevList =>
+            prevList.map(prop =>
+                prop.id === idToUpdate
+                    ? { ...prop, [field]: value }
+                    : prop
+            )
+        );
     };
 
     const handleSaveOnBack = async () => {
@@ -377,6 +359,19 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                                 onChangeText={(text) => handlePropertyFieldChange(prop.id, 'value', text)}
                                                 style={AppStyles.formInput}
                                             />
+                                            {/* Show calculated result below the input */}
+                                            {prop.value && /[+\-*/]/.test(prop.value) && (() => {
+                                                const propertiesMap = buildPropertiesMap(newPropertiesList);
+                                                const result = evaluateFormula(prop.value, propertiesMap);
+                                                if (result !== null) {
+                                                    return (
+                                                        <Text style={{ color: colors.blue600, marginTop: 6 }}>
+                                                            {result}
+                                                        </Text>
+                                                    );
+                                                }
+                                                return null;
+                                            })()}
                                         </View>
                                     </View>
                                 ) : (
@@ -399,6 +394,19 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                                 onChangeText={(text) => handlePropertyFieldChange(prop.id, 'value', text)}
                                                 style={AppStyles.formInput}
                                             />
+                                            {/* Show calculated result below the input */}
+                                            {prop.value && /[+\-*/]/.test(prop.value) && (() => {
+                                                const propertiesMap = buildPropertiesMap(newPropertiesList);
+                                                const result = evaluateFormula(prop.value, propertiesMap);
+                                                if (result !== null) {
+                                                    return (
+                                                        <Text style={{ color: colors.blue600, marginTop: 6, }}>
+                                                            {result}
+                                                        </Text>
+                                                    );
+                                                }
+                                                return null;
+                                            })()}
                                         </View>
                                     </>
                                 )}
