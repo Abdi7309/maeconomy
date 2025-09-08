@@ -198,15 +198,24 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
     };
 
     useEffect(() => {
-        if (newPropertiesList.length === 0) {
+        if (newPropertiesList.length === 0 && selectedTemplateForPropertyAdd === null) {
             addNewPropertyField();
         }
-    }, [newPropertiesList]);
+    }, [newPropertiesList, selectedTemplateForPropertyAdd]);
 
     const handleClearTemplate = () => {
         setSelectedTemplateForPropertyAdd(null);
         setNewPropertiesList([]);
-        setTimeout(() => addNewPropertyField(), 0);
+        setNextNewPropertyId(0); // Reset the ID counter
+        setTimeout(() => {
+            setNewPropertiesList([{
+                id: 0,
+                name: '',
+                value: '',
+                files: []
+            }]);
+            setNextNewPropertyId(1);
+        }, 0);
     };
 
     return (
