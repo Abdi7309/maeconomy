@@ -8,11 +8,15 @@ import AddTemplateModal from '../components/modals/AddTemplateModal';
 import TemplatePickerModal from '../components/modals/TemplatePickerModal';
 
 // 🔑 helper: build map of { name: value }
-const buildPropertiesMap = (properties) => {
+const buildPropertiesMap = (properties, outputUnit) => {
     const map = {};
     properties.forEach(prop => {
         if (prop.name.trim() !== '' && !isNaN(Number(prop.value))) {
-            map[prop.name.toLowerCase()] = Number(prop.value);
+            // Convert value to outputUnit if possible
+            const val = prop.unit && outputUnit
+                ? convertToUnit(Number(prop.value), prop.unit, outputUnit)
+                : Number(prop.value);
+            map[prop.name.toLowerCase()] = val;
         }
     });
     return map;
@@ -34,6 +38,24 @@ const evaluateFormula = (formula, propertiesMap) => {
     }
 };
 
+const unitConversionTable = {
+    // Length
+    m:    { m: 1, cm: 0.01, mm: 0.001 },
+    cm:   { m: 100, cm: 1, mm: 0.1 },
+    mm:   { m: 1000, cm: 10, mm: 1 },
+    // Mass
+    kg:   { kg: 1, g: 0.001 },
+    g:    { kg: 1000, g: 1 },
+    // Volume
+    L:    { L: 1, mL: 0.001 },
+    mL:   { L: 1000, mL: 1 }
+};
+
+const convertToUnit = (value, fromUnit, toUnit) => {
+    if (!fromUnit || !toUnit || !unitConversionTable[toUnit] || !unitConversionTable[toUnit][fromUnit]) return value;
+    return value * unitConversionTable[toUnit][fromUnit];
+};
+
 const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, setCurrentScreen, onSave, onTemplateAdded, findItemByPath }) => {
 
     const objectIdForProperties = currentPath[currentPath.length - 1];
@@ -48,6 +70,9 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
     const [selectedTemplateForPropertyAdd, setSelectedTemplateForPropertyAdd] = useState(null);
     const [showTemplatePickerModal, setShowTemplatePickerModal] = useState(false);
     const [showAddTemplateModal, setShowAddTemplateModal] = useState(false);
+    const [outputUnit, setOutputUnit] = useState('m'); // default to meters
+
+    const allUnits = ['m', 'cm', 'mm', 'kg', 'g', 'L', 'mL'];
 
     const addNewPropertyField = () => {
         setNewPropertiesList(prevList => {
@@ -55,6 +80,7 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                 id: nextNewPropertyId,
                 name: '',
                 value: '',
+                unit: '', // <-- Add this line
                 files: []
             };
             setNextNewPropertyId(prevId => prevId + 1);
@@ -241,6 +267,7 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                             id: index,
                             name: prop.name,
                             value: prop.value || '',
+                            unit: prop.unit || '', 
                             files: []
                         }));
                         setNewPropertiesList(templateProps);
@@ -295,10 +322,12 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                         <Text style={AppStyles.propertyValue}>{prop.waarde}</Text>
                                     </View>
                                 ))
-                            ) : (
-                                <View style={AppStyles.emptyState}><Text style={AppStyles.emptyStateText}>Geen bestaande eigenschappen.</Text></View>
-                            )}
-                        </View>
+    ) : (
+        <View style={AppStyles.emptyState}>
+            <Text style={AppStyles.emptyStateText}>Geen bestaande eigenschappen.</Text>
+        </View>
+    )}
+</View>
                     </View>
                     <View style={[AppStyles.card, { marginBottom: 24, padding: 16 }]}>
                         <Text style={[AppStyles.infoItemValue, { marginBottom: 16, fontSize: 16, fontWeight: '600' }]}>
@@ -338,9 +367,9 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                         onPress={() => removePropertyField(prop.id)}
                                         style={{
                                             position: 'absolute',
-                                            top: index === 0 ? -12 : 14,
-                                            right: 0,
-                                            zIndex: 1,
+                                            top: index === 0 ? -10 :30,
+                                            right: -2, // Move left a bit for better alignment
+                                            zIndex: 10,
                                             padding: 8,
                                         }}
                                     >
@@ -349,7 +378,6 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                 )}
                                 <View>
                                 {Platform.OS === 'web' ? (
-                                    // ✅ Web: side by side
                                     <View style={{ flexDirection: 'row', gap: 12 }}>
                                         <View style={[AppStyles.formGroup, { flex: 1 }]}>
                                             <Text style={AppStyles.formLabel}>Eigenschap Naam</Text>
@@ -363,16 +391,27 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                         <View style={[AppStyles.formGroup, { flex: 1 }]}>
                                             <Text style={AppStyles.formLabel}>Waarde</Text>
                                             <TextInput
-                                                placeholder="Bijv. 2kg"
+                                                placeholder="Bijv. 2"
                                                 value={prop.value}
                                                 onChangeText={(text) => handlePropertyFieldChange(prop.id, 'value', text)}
                                                 style={AppStyles.formInput}
                                             />
                                             {/* Show calculated result below the input */}
                                             {prop.value && /[+\-*/]/.test(prop.value) && (() => {
-                                                const propertiesMap = buildPropertiesMap(newPropertiesList);
+                                                const outputUnit = prop.unit;
+                                                const propertiesMap = buildPropertiesMap(newPropertiesList, outputUnit);
                                                 const result = evaluateFormula(prop.value, propertiesMap);
                                                 if (result !== null) {
+                                                    // If unit is set, show converted result with unit
+                                                    if (outputUnit) {
+                                                        const convertedResult = convertToUnit(result, outputUnit, outputUnit);
+                                                        return (
+                                                            <Text style={{ color: colors.blue600, marginTop: 6 }}>
+                                                                {convertedResult} {outputUnit}
+                                                            </Text>
+                                                        );
+                                                    }
+                                                    // If no unit, show raw result
                                                     return (
                                                         <Text style={{ color: colors.blue600, marginTop: 6 }}>
                                                             {result}
@@ -382,9 +421,17 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                                 return null;
                                             })()}
                                         </View>
+                                        <View style={[AppStyles.formGroup, { width: 80 }]}>
+                                            <Text style={AppStyles.formLabel}>Eenheid</Text>
+                                            <TextInput
+                                                placeholder="kg/cm/ml"
+                                                value={prop.unit}
+                                                onChangeText={(text) => handlePropertyFieldChange(prop.id, 'unit', text)}
+                                                style={AppStyles.formInput}
+                                            />
+                                        </View>
                                     </View>
                                 ) : (
-                                    // 📱 Mobile: stacked
                                     <>
                                         <View style={AppStyles.formGroup}>
                                             <Text style={AppStyles.formLabel}>Eigenschap Naam</Text>
@@ -398,24 +445,44 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                         <View style={AppStyles.formGroup}>
                                             <Text style={AppStyles.formLabel}>Waarde</Text>
                                             <TextInput
-                                                placeholder="Bijv. 2kg"
+                                                placeholder="Bijv. 2"
                                                 value={prop.value}
                                                 onChangeText={(text) => handlePropertyFieldChange(prop.id, 'value', text)}
                                                 style={AppStyles.formInput}
                                             />
                                             {/* Show calculated result below the input */}
                                             {prop.value && /[+\-*/]/.test(prop.value) && (() => {
-                                                const propertiesMap = buildPropertiesMap(newPropertiesList);
+                                                const outputUnit = prop.unit;
+                                                const propertiesMap = buildPropertiesMap(newPropertiesList, outputUnit);
                                                 const result = evaluateFormula(prop.value, propertiesMap);
                                                 if (result !== null) {
+                                                    // If unit is set, show converted result with unit
+                                                    if (outputUnit) {
+                                                        const convertedResult = convertToUnit(result, outputUnit, outputUnit);
+                                                        return (
+                                                            <Text style={{ color: colors.blue600, marginTop: 6 }}>
+                                                                {convertedResult} {outputUnit}
+                                                            </Text>
+                                                        );
+                                                    }
+                                                    // If no unit, show raw result
                                                     return (
-                                                        <Text style={{ color: colors.blue600, marginTop: 6, }}>
+                                                        <Text style={{ color: colors.blue600, marginTop: 6 }}>
                                                             {result}
                                                         </Text>
                                                     );
                                                 }
                                                 return null;
                                             })()}
+                                        </View>
+                                        <View style={AppStyles.formGroup}>
+                                            <Text style={AppStyles.formLabel}>Eenheid</Text>
+                                            <TextInput
+                                                placeholder="kg/cm/ml"
+                                                value={prop.unit}
+                                                onChangeText={(text) => handlePropertyFieldChange(prop.id, 'unit', text)}
+                                                style={AppStyles.formInput}
+                                            />
                                         </View>
                                     </>
                                 )}
@@ -443,7 +510,6 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                 )}
                             </View>
                         ))}
-
                         <TouchableOpacity onPress={handleSaveOnBack} style={[AppStyles.btnPrimary, AppStyles.btnFull, AppStyles.btnFlexCenter, { marginTop: 16 }]}>
                             <Text style={AppStyles.btnPrimaryText}>Opslaan</Text>
                         </TouchableOpacity>
