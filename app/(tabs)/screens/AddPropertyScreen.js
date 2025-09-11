@@ -7,22 +7,50 @@ import AppStyles, { colors } from '../AppStyles';
 import AddTemplateModal from '../components/modals/AddTemplateModal';
 import TemplatePickerModal from '../components/modals/TemplatePickerModal';
 
-// 🔑 helper: build map of { name: value }
 const buildPropertiesMap = (properties, outputUnit) => {
     const map = {};
+
+    // Helper to get a property's calculated value
+    function getCalculatedValue(prop, visited = {}) {
+        // Prevent infinite recursion (circular reference)
+        if (visited[prop.name]) return 0;
+        visited[prop.name] = true;
+
+        let val = prop.value;
+        // If it's a formula, replace referenced properties with their calculated values
+        if (typeof val === 'string' && /[+\-*/]/.test(val)) {
+            let formula = val;
+            properties.forEach(refProp => {
+                if (refProp.name.trim() !== '') {
+                    // Recursively get the calculated value for referenced property
+                    const refValue = getCalculatedValue(refProp, { ...visited });
+                    const regex = new RegExp(`\\b${refProp.name}\\b`, "gi");
+                    formula = formula.replace(regex, refValue);
+                }
+            });
+            try {
+                val = eval(formula);
+            } catch (e) {
+                val = prop.value;
+            }
+        }
+        // Convert to output unit if needed
+        if (prop.unit && outputUnit) {
+            val = convertToUnit(Number(val), prop.unit, outputUnit);
+        }
+        return val;
+    }
+
+    // Calculate and store all property values
     properties.forEach(prop => {
-        if (prop.name.trim() !== '' && !isNaN(Number(prop.value))) {
-            // Convert value to outputUnit if possible
-            const val = prop.unit && outputUnit
-                ? convertToUnit(Number(prop.value), prop.unit, outputUnit)
-                : Number(prop.value);
-            map[prop.name.toLowerCase()] = val;
+        if (prop.name.trim() !== '') {
+            map[prop.name.toLowerCase()] = getCalculatedValue(prop);
         }
     });
+
     return map;
 };
 
-// 🔑 helper: evaluate formula string safely
 const evaluateFormula = (formula, propertiesMap) => {
     let expression = formula;
     Object.keys(propertiesMap).forEach(key => {
@@ -31,8 +59,7 @@ const evaluateFormula = (formula, propertiesMap) => {
     });
 
     try {
-        // eslint-disable-next-line no-new-func
-        return new Function(`return ${expression}`)();
+        return eval(expression); 
     } catch (e) {
         return null;
     }
@@ -80,7 +107,7 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                 id: nextNewPropertyId,
                 name: '',
                 value: '',
-                unit: '', // <-- Add this line
+                unit: '', 
                 files: []
             };
             setNextNewPropertyId(prevId => prevId + 1);
@@ -402,18 +429,16 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                                 const propertiesMap = buildPropertiesMap(newPropertiesList, outputUnit);
                                                 const result = evaluateFormula(prop.value, propertiesMap);
                                                 if (result !== null) {
-                                                    // If unit is set, show converted result with unit
                                                     if (outputUnit) {
                                                         const convertedResult = convertToUnit(result, outputUnit, outputUnit);
                                                         return (
-                                                            <Text style={{ color: colors.blue600, marginTop: 6 }}>
+                                                            <Text style={{ color: colors.blue600, marginTop: 6, fontSize: 16 }}>
                                                                 {convertedResult} {outputUnit}
                                                             </Text>
                                                         );
                                                     }
-                                                    // If no unit, show raw result
                                                     return (
-                                                        <Text style={{ color: colors.blue600, marginTop: 6 }}>
+                                                        <Text style={{ color: colors.blue600, marginTop: 6, fontSize: 16 }}>
                                                             {result}
                                                         </Text>
                                                     );
@@ -460,14 +485,14 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                                     if (outputUnit) {
                                                         const convertedResult = convertToUnit(result, outputUnit, outputUnit);
                                                         return (
-                                                            <Text style={{ color: colors.blue600, marginTop: 6 }}>
+                                                            <Text style={{ color: colors.blue600, marginTop: 6, fontSize: 16 }}>
                                                                 {convertedResult} {outputUnit}
                                                             </Text>
                                                         );
                                                     }
                                                     // If no unit, show raw result
                                                     return (
-                                                        <Text style={{ color: colors.blue600, marginTop: 6 }}>
+                                                        <Text style={{ color: colors.blue600, marginTop: 6, fontSize: 16 }}>
                                                             {result}
                                                         </Text>
                                                     );
