@@ -97,7 +97,7 @@ function fetchItemWithHierarchy($pdo, $id) {
     }
 
     // Fetch properties for the current object (using 'eigenschappen' table)
-    $stmt_prop = $pdo->prepare("SELECT id, object_id, name, waarde, created_at, updated_at FROM eigenschappen WHERE object_id = ?");
+    $stmt_prop = $pdo->prepare("SELECT id, object_id, name, waarde, formule, eenheid, created_at, updated_at FROM eigenschappen WHERE object_id = ?");
     $stmt_prop->execute([$item['id']]);
     $properties = $stmt_prop->fetchAll();
 
@@ -363,7 +363,7 @@ switch ($entity) {
                     echo json_encode(["message" => "Missing 'object_id' for properties query."]);
                     break;
                 }
-                $stmt = $pdo->prepare("SELECT id, object_id, name, waarde, created_at, updated_at FROM eigenschappen WHERE object_id = ? ORDER BY name ASC");
+                $stmt = $pdo->prepare("SELECT id, object_id, name, waarde, formule, eenheid, created_at, updated_at FROM eigenschappen WHERE object_id = ? ORDER BY name ASC");
                 $stmt->execute([$object_id]);
                 $properties = $stmt->fetchAll();
                 http_response_code(200);
@@ -381,12 +381,14 @@ switch ($entity) {
                 $object_id = $_POST['object_id'];
                 $name = $_POST['name'];
                 $waarde = $_POST['waarde'] ?? '';
+                $formule = $_POST['formule'] ?? '';
+                $eenheid = $_POST['eenheid'] ?? '';
 
                 $pdo->beginTransaction();
                 try {
                     // Insert the property text data
-                    $stmt = $pdo->prepare("INSERT INTO eigenschappen (object_id, name, waarde, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())");
-                    $stmt->execute([$object_id, $name, $waarde]);
+                    $stmt = $pdo->prepare("INSERT INTO eigenschappen (object_id, name, waarde, formule, eenheid, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())");
+                    $stmt->execute([$object_id, $name, $waarde, $formule, $eenheid]);
                     $new_property_id = $pdo->lastInsertId();
 
                     $uploadDir = 'uploads/';
@@ -450,14 +452,11 @@ switch ($entity) {
                     echo json_encode(["message" => "Missing 'name' or 'waarde' for property update."]);
                     break;
                 }
-                $stmt = $pdo->prepare("UPDATE eigenschappen SET name = ?, waarde = ?, updated_at = NOW() WHERE id = ?");
-                if ($stmt->execute([$input['name'], $input['waarde'], $id])) {
-                    http_response_code(200);
-                    echo json_encode(["message" => "Property updated successfully."]);
-                } else {
-                    http_response_code(500);
-                    echo json_encode(["message" => "Failed to update property."]);
-                }
+                $formule = $input['formule'] ?? '';
+                $stmt = $pdo->prepare("UPDATE eigenschappen SET name = ?, waarde = ?, formule = ?, updated_at = NOW() WHERE id = ?");
+                $stmt->execute([$input['name'], $input['waarde'], $formule, $id]);
+                http_response_code(200);
+                echo json_encode(["message" => "Property updated successfully."]);
                 break;
 
             case 'DELETE':

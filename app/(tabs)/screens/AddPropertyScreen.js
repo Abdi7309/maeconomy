@@ -98,6 +98,9 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
     const [showTemplatePickerModal, setShowTemplatePickerModal] = useState(false);
     const [showAddTemplateModal, setShowAddTemplateModal] = useState(false);
     const [outputUnit, setOutputUnit] = useState('m'); // default to meters
+    const [editingProperty, setEditingProperty] = useState(null);
+    const [editedValue, setEditedValue] = useState('');
+    const [editedFormula, setEditedFormula] = useState('');
 
     const allUnits = ['m', 'cm', 'mm', 'kg', 'g', 'L', 'mL'];
 
@@ -228,10 +231,21 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
         // auto-compute formulas
         const updatedList = newPropertiesList.map(prop => {
             if (prop.value && /[+\-*/]/.test(prop.value)) {
+                const outputUnit = prop.unit;
+                const propertiesMap = buildPropertiesMap(newPropertiesList, outputUnit);
                 const result = evaluateFormula(prop.value, propertiesMap);
-                return { ...prop, value: result !== null ? result.toString() : prop.value };
+                let finalValue = result !== null ? result : prop.value;
+                // If unit is set, convert result to that unit
+                if (outputUnit && result !== null) {
+                    finalValue = convertToUnit(result, outputUnit, outputUnit);
+                }
+                return { 
+                    ...prop, 
+                    formule: prop.value,
+                    value: finalValue.toString() // <-- Save calculated value!
+                };
             }
-            return prop;
+            return { ...prop, formule: '', value: prop.value };
         });
 
         const validPropertiesToSave = updatedList.filter(prop =>
@@ -341,20 +355,114 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                         <View style={AppStyles.propertyList}>
                             {(item.properties || []).length > 0 ? (
                                 (item.properties || []).map((prop, index) => (
-                                    <View key={index} style={AppStyles.propertyItem}>
-                                        <View style={AppStyles.propertyItemMain}>
-                                            <Tag color={colors.lightGray500} size={20} />
-                                            <Text style={AppStyles.propertyName}>{prop.name}</Text>
+                                    <View key={index} style={[AppStyles.propertyItem, { marginBottom: 12 }]}>
+                                        <View style={{ width: '100%' }}>
+                                            {editingProperty === index ? (
+                                                // --- EDITING MODE ---
+                                                <View>
+                                                    <View style={AppStyles.propertyItemMain}>
+                                                        <Tag color={colors.lightGray500} size={20} />
+                                                        <Text style={AppStyles.propertyName}>{prop.name}</Text>
+                                                    </View>
+                                                    <View style={{ marginTop: 8 }}>
+                                                        <Text style={AppStyles.formLabel}>Formule</Text>
+                                                        <TextInput
+                                                            placeholder="Bijv. lengte * breedte"
+                                                            value={editedFormula}
+                                                            onChangeText={setEditedFormula}
+                                                            style={AppStyles.formInput}
+                                                        />
+                                                        <Text style={[AppStyles.formLabel, { marginTop: 12 }]}>Waarde</Text>
+                                                        <TextInput
+                                                            placeholder="Bijv. 20"
+                                                            value={editedValue}
+                                                            onChangeText={setEditedValue}
+                                                            style={AppStyles.formInput}
+                                                        />
+                                                        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
+                                                            <TouchableOpacity>
+                                                                <Text>Opslaan</Text>
+                                                            </TouchableOpacity>
+                                                            <TouchableOpacity style={{ marginLeft: 8 }}>
+                                                                <Text>Annuleer</Text>
+                                                            </TouchableOpacity>
+                                                        </View>
+                                                    </View>
+                                                </View>
+                                            ) : (
+                                                // --- DISPLAY MODE ---
+                                                // This is the default view for each property.
+<View
+  style={{
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  }}
+>
+  {/* Left Side */}
+  <View
+    style={[
+      AppStyles.propertyItemMain,
+      { flexDirection: 'row', alignItems: 'center' },
+    ]}
+  >
+    <Tag color={colors.lightGray500} size={20} />
+    <Text style={[AppStyles.propertyName, { marginLeft: 8 }]}>{prop.name}</Text>
+  </View>
+
+  {/* Right Side */}
+  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+    <View style={{ alignItems: 'flex-end' }}>
+      {prop.formule && prop.formule.trim() !== '' && (
+        <Text
+          style={{
+            color: colors.lightGray500,
+            fontSize: 13,
+            fontStyle: 'italic',
+          }}
+        >
+          Formule: {prop.formule}
+        </Text>
+      )}
+      <Text style={[AppStyles.propertyValue, { marginTop: 4 }]}>
+        {prop.waarde}
+        {prop.eenheid ? ` ${prop.eenheid}` : ''}
+      </Text>
+    </View>
+
+    {/* Divider */}
+    <View
+      style={{
+        width: 1,
+        backgroundColor: colors.lightGray500,
+        marginHorizontal: 10,
+        alignSelf: 'stretch', // stretches line vertically
+      }}
+    />
+
+    {/* Bewerken */}
+    <TouchableOpacity
+      onPress={() => {
+        setEditingProperty(index);
+        setEditedValue(prop.waarde);
+        setEditedFormula(prop.formule || '');
+      }}
+    >
+      <Text style={{ color: colors.primary, fontWeight: '600' }}>Bewerken</Text>
+    </TouchableOpacity>
+  </View>
+</View>
+
+                                            )}
                                         </View>
-                                        <Text style={AppStyles.propertyValue}>{prop.waarde}</Text>
                                     </View>
                                 ))
-    ) : (
-        <View style={AppStyles.emptyState}>
-            <Text style={AppStyles.emptyStateText}>Geen bestaande eigenschappen.</Text>
-        </View>
-    )}
-</View>
+                            ) : (
+                                <View style={AppStyles.emptyState}>
+                                    <Text style={AppStyles.emptyStateText}>Geen bestaande eigenschappen.</Text>
+                                </View>
+                            )}
+                        </View>
                     </View>
                     <View style={[AppStyles.card, { marginBottom: 24, padding: 16 }]}>
                         <Text style={[AppStyles.infoItemValue, { marginBottom: 16, fontSize: 16, fontWeight: '600' }]}>

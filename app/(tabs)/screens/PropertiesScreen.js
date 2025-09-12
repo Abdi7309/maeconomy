@@ -1,6 +1,6 @@
+import { ChevronLeft, File, FileImage, FileText, Paperclip, Plus, Tag, X } from 'lucide-react-native';
 import { useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, RefreshControl, StatusBar, Linking, Modal, Image } from 'react-native';
-import { ChevronLeft, Plus, Tag, Paperclip, File, FileImage, FileText, X } from 'lucide-react-native';
+import { Image, Linking, Modal, RefreshControl, ScrollView, StatusBar, Text, TouchableOpacity, View } from 'react-native';
 import AppStyles, { colors } from '../AppStyles';
 import CONFIG from '../config/config';
 
@@ -116,7 +116,18 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
                                         {renderIcon()}
                                         <Text style={AppStyles.propertyName}>{prop.name}</Text>
                                     </View>
-                                    <Text style={AppStyles.propertyValue}>{prop.waarde}</Text>
+                                    <View style={{ alignItems: 'flex-end' }}>
+                                        {/* Show formula if present */}
+                                        {prop.formule && prop.formule.trim() !== '' && (
+                                            <Text style={{ color: colors.lightGray500, fontSize: 13, fontStyle: 'italic' }}>
+                                                Formule: {prop.formule}
+                                            </Text>
+                                        )}
+                                        <Text style={AppStyles.propertyValue}>
+                                            {prop.waarde}
+                                            {prop.eenheid ? ` ${prop.eenheid}` : ''}
+                                        </Text>
+                                    </View>
                                 </View>
 
                                 {prop.files && prop.files.length > 0 && (

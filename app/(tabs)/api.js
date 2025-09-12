@@ -153,6 +153,8 @@ export const addProperties = async (objectId, properties) => {
             formData.append('object_id', objectId);
             formData.append('name', prop.name.trim());
             formData.append('waarde', prop.value.trim());
+            formData.append('formule', prop.formule ? prop.formule : '');
+            formData.append('eenheid', prop.unit ? prop.unit : '');
 
             // Check if there's a files array and it's not empty.
             if (prop.files && prop.files.length > 0) {
