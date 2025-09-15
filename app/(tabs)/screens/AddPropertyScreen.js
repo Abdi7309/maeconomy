@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, ScrollView, StatusBar, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import AppStyles, { colors } from '../AppStyles';
 import AddTemplateModal from '../components/modals/AddTemplateModal';
+import EditPropertyModal from '../components/modals/EditPropertyModal';
 import TemplatePickerModal from '../components/modals/TemplatePickerModal';
 
 const buildPropertiesMap = (properties, outputUnit) => {
@@ -29,9 +30,13 @@ const buildPropertiesMap = (properties, outputUnit) => {
                 }
             });
             try {
+                // Reject if unknown identifiers remain
+                if (/[^0-9+\-*/().\s]/.test(formula)) {
+                    return 'Error';
+                }
                 val = eval(formula);
             } catch (e) {
-                val = prop.value;
+                val = 'Error';
             }
         }
         // Convert to output unit if needed
@@ -59,9 +64,17 @@ const evaluateFormula = (formula, propertiesMap) => {
     });
 
     try {
-        return eval(expression); 
+        // If after replacement there are any non-math characters, flag error
+        if (/[^0-9+\-*/().\s]/.test(expression)) {
+            return { value: null, error: 'Onbekende variabelen in formule' };
+        }
+        const result = eval(expression);
+        if (typeof result === 'number' && !isNaN(result)) {
+            return { value: result, error: null };
+        }
+        return { value: null, error: 'Formule kon niet worden berekend' };
     } catch (e) {
-        return null;
+        return { value: null, error: 'Formule kon niet worden berekend' };
     }
 };
 
@@ -101,8 +114,25 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
     const [editingProperty, setEditingProperty] = useState(null);
     const [editedValue, setEditedValue] = useState('');
     const [editedFormula, setEditedFormula] = useState('');
+    const [existingPropertiesDraft, setExistingPropertiesDraft] = useState([]);
+    const [editedUnit, setEditedUnit] = useState('');
+    const [editedName, setEditedName] = useState('');
+    const [showEditModal, setShowEditModal] = useState(false);
+    const [modalPropertyIndex, setModalPropertyIndex] = useState(null);
 
     const allUnits = ['m', 'cm', 'mm', 'kg', 'g', 'L', 'mL'];
+
+    // Initialize or refresh the draft when item.properties changes
+    useEffect(() => {
+        const draft = (item.properties || []).map(p => ({
+            id: p.id,
+            name: p.name,
+            waarde: p.waarde,
+            formule: p.formule || '',
+            eenheid: p.eenheid || ''
+        }));
+        setExistingPropertiesDraft(draft);
+    }, [item.properties]);
 
     const addNewPropertyField = () => {
         setNewPropertiesList(prevList => {
@@ -233,16 +263,20 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
             if (prop.value && /[+\-*/]/.test(prop.value)) {
                 const outputUnit = prop.unit;
                 const propertiesMap = buildPropertiesMap(newPropertiesList, outputUnit);
-                const result = evaluateFormula(prop.value, propertiesMap);
-                let finalValue = result !== null ? result : prop.value;
-                // If unit is set, convert result to that unit
-                if (outputUnit && result !== null) {
-                    finalValue = convertToUnit(result, outputUnit, outputUnit);
+                const { value: result, error } = evaluateFormula(prop.value, propertiesMap);
+                let finalValue;
+                if (error) {
+                    finalValue = 'Error';
+                } else {
+                    finalValue = result;
+                    if (outputUnit && result !== null) {
+                        finalValue = convertToUnit(result, outputUnit, outputUnit);
+                    }
                 }
                 return { 
                     ...prop, 
                     formule: prop.value,
-                    value: finalValue.toString() // <-- Save calculated value!
+                    value: String(finalValue)
                 };
             }
             return { ...prop, formule: '', value: prop.value };
@@ -283,6 +317,23 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
             }]);
             setNextNewPropertyId(1);
         }, 0);
+    };
+
+    // Helper to build a map from existing properties (for edit preview)
+    const buildExistingPropertiesMap = (outputUnit) => {
+        const props = (existingPropertiesDraft || []).map(p => ({
+            name: p.name,
+            value: p.formule && /[+\-*/]/.test(p.formule)
+                ? (() => {
+                    // Evaluate nested formulas within the draft first
+                    const innerMap = buildPropertiesMap(existingPropertiesDraft.map(x => ({ name: x.name, value: x.waarde, unit: x.eenheid || '' })), p.eenheid || outputUnit);
+                    const { value: innerVal, error: innerErr } = evaluateFormula(p.formule, innerMap);
+                    return innerErr ? 'Error' : String(innerVal);
+                })()
+                : p.waarde,
+            unit: p.eenheid || ''
+        }));
+        return buildPropertiesMap(props, outputUnit);
     };
 
     return (
@@ -357,103 +408,65 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                 (item.properties || []).map((prop, index) => (
                                     <View key={index} style={[AppStyles.propertyItem, { marginBottom: 12 }]}>
                                         <View style={{ width: '100%' }}>
-                                            {editingProperty === index ? (
-                                                // --- EDITING MODE ---
-                                                <View>
-                                                    <View style={AppStyles.propertyItemMain}>
-                                                        <Tag color={colors.lightGray500} size={20} />
-                                                        <Text style={AppStyles.propertyName}>{prop.name}</Text>
-                                                    </View>
-                                                    <View style={{ marginTop: 8 }}>
-                                                        <Text style={AppStyles.formLabel}>Formule</Text>
-                                                        <TextInput
-                                                            placeholder="Bijv. lengte * breedte"
-                                                            value={editedFormula}
-                                                            onChangeText={setEditedFormula}
-                                                            style={AppStyles.formInput}
-                                                        />
-                                                        <Text style={[AppStyles.formLabel, { marginTop: 12 }]}>Waarde</Text>
-                                                        <TextInput
-                                                            placeholder="Bijv. 20"
-                                                            value={editedValue}
-                                                            onChangeText={setEditedValue}
-                                                            style={AppStyles.formInput}
-                                                        />
-                                                        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
-                                                            <TouchableOpacity>
-                                                                <Text>Opslaan</Text>
-                                                            </TouchableOpacity>
-                                                            <TouchableOpacity style={{ marginLeft: 8 }}>
-                                                                <Text>Annuleer</Text>
-                                                            </TouchableOpacity>
-                                                        </View>
-                                                    </View>
+                                            <View
+                                            style={{
+                                                flexDirection: 'row',
+                                                justifyContent: 'space-between',
+                                                alignItems: 'center',
+                                            }}
+                                            >
+                                            {/* Left Side */}
+                                            <View
+                                                style={[
+                                                AppStyles.propertyItemMain,
+                                                { flexDirection: 'row', alignItems: 'center' },
+                                                ]}
+                                            >
+                                                <Tag color={colors.lightGray500} size={20} />
+                                                <Text style={[AppStyles.propertyName, { marginLeft: 8 }]}>{prop.name}</Text>
+                                            </View>
+
+                                            {/* Right Side */}
+                                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                                <View style={{ alignItems: 'flex-end' }}>
+                                                {prop.formule && prop.formule.trim() !== '' && (
+                                                    <Text
+                                                    style={{
+                                                        color: colors.lightGray500,
+                                                        fontSize: 13,
+                                                        fontStyle: 'italic',
+                                                    }}
+                                                    >
+                                                    Formule: {prop.formule}
+                                                    </Text>
+                                                )}
+                                                <Text style={[AppStyles.propertyValue, { marginTop: 4 }]}>
+                                                    {prop.waarde}
+                                                    {prop.eenheid ? ` ${prop.eenheid}` : ''}
+                                                </Text>
                                                 </View>
-                                            ) : (
-                                                // --- DISPLAY MODE ---
-                                                // This is the default view for each property.
-<View
-  style={{
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  }}
->
-  {/* Left Side */}
-  <View
-    style={[
-      AppStyles.propertyItemMain,
-      { flexDirection: 'row', alignItems: 'center' },
-    ]}
-  >
-    <Tag color={colors.lightGray500} size={20} />
-    <Text style={[AppStyles.propertyName, { marginLeft: 8 }]}>{prop.name}</Text>
-  </View>
 
-  {/* Right Side */}
-  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-    <View style={{ alignItems: 'flex-end' }}>
-      {prop.formule && prop.formule.trim() !== '' && (
-        <Text
-          style={{
-            color: colors.lightGray500,
-            fontSize: 13,
-            fontStyle: 'italic',
-          }}
-        >
-          Formule: {prop.formule}
-        </Text>
-      )}
-      <Text style={[AppStyles.propertyValue, { marginTop: 4 }]}>
-        {prop.waarde}
-        {prop.eenheid ? ` ${prop.eenheid}` : ''}
-      </Text>
-    </View>
+                                                {/* Divider */}
+                                                <View
+                                                style={{
+                                                    width: 1,
+                                                    backgroundColor: colors.lightGray500,
+                                                    marginHorizontal: 10,
+                                                    alignSelf: 'stretch', 
+                                                }}
+                                                />
 
-    {/* Divider */}
-    <View
-      style={{
-        width: 1,
-        backgroundColor: colors.lightGray500,
-        marginHorizontal: 10,
-        alignSelf: 'stretch', // stretches line vertically
-      }}
-    />
-
-    {/* Bewerken */}
-    <TouchableOpacity
-      onPress={() => {
-        setEditingProperty(index);
-        setEditedValue(prop.waarde);
-        setEditedFormula(prop.formule || '');
-      }}
-    >
-      <Text style={{ color: colors.primary, fontWeight: '600' }}>Bewerken</Text>
-    </TouchableOpacity>
-  </View>
-</View>
-
-                                            )}
+                                                {/* Bewerken */}
+                                                <TouchableOpacity
+                                                onPress={() => {
+                                                    setModalPropertyIndex(index);
+                                                    setShowEditModal(true);
+                                                }}
+                                                >
+                                                <Text style={{ color: colors.primary, fontWeight: '600' }}>Bewerken</Text>
+                                                </TouchableOpacity>
+                                            </View>
+                                            </View>
                                         </View>
                                     </View>
                                 ))
@@ -464,6 +477,23 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                             )}
                         </View>
                     </View>
+                    {showEditModal && modalPropertyIndex !== null && (
+                        <EditPropertyModal
+                            visible={showEditModal}
+                            onClose={() => setShowEditModal(false)}
+                            property={item.properties[modalPropertyIndex]}
+                            existingPropertiesDraft={existingPropertiesDraft}
+                            onSaved={(updated) => {
+                                const idx = modalPropertyIndex;
+                                if (item.properties && item.properties[idx]) {
+                                    item.properties[idx] = { ...item.properties[idx], ...updated };
+                                }
+                                setExistingPropertiesDraft(prev => prev.map((p, i) => i === idx ? { ...p, name: updated.name, waarde: updated.waarde, formule: updated.formule, eenheid: updated.eenheid } : p));
+                                setShowEditModal(false);
+                                setModalPropertyIndex(null);
+                            }}
+                        />
+                    )}
                     <View style={[AppStyles.card, { marginBottom: 24, padding: 16 }]}>
                         <Text style={[AppStyles.infoItemValue, { marginBottom: 16, fontSize: 16, fontWeight: '600' }]}>
                             Nieuwe Eigenschappen
@@ -535,7 +565,14 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                             {prop.value && /[+\-*/]/.test(prop.value) && (() => {
                                                 const outputUnit = prop.unit;
                                                 const propertiesMap = buildPropertiesMap(newPropertiesList, outputUnit);
-                                                const result = evaluateFormula(prop.value, propertiesMap);
+                                                const { value: result, error } = evaluateFormula(prop.value, propertiesMap);
+                                                if (error) {
+                                                    return (
+                                                        <Text style={{ color: colors.red600, marginTop: 6, fontSize: 14 }}>
+                                                            {error}
+                                                        </Text>
+                                                    );
+                                                }
                                                 if (result !== null) {
                                                     if (outputUnit) {
                                                         const convertedResult = convertToUnit(result, outputUnit, outputUnit);
@@ -587,7 +624,14 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                             {prop.value && /[+\-*/]/.test(prop.value) && (() => {
                                                 const outputUnit = prop.unit;
                                                 const propertiesMap = buildPropertiesMap(newPropertiesList, outputUnit);
-                                                const result = evaluateFormula(prop.value, propertiesMap);
+                                                const { value: result, error } = evaluateFormula(prop.value, propertiesMap);
+                                                if (error) {
+                                                    return (
+                                                        <Text style={{ color: colors.red600, marginTop: 6, fontSize: 14 }}>
+                                                            {error}
+                                                        </Text>
+                                                    );
+                                                }
                                                 if (result !== null) {
                                                     // If unit is set, show converted result with unit
                                                     if (outputUnit) {

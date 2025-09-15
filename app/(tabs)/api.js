@@ -197,4 +197,24 @@ export const addProperties = async (objectId, properties) => {
     }
 };
 
+export const updateProperty = async (propertyId, { name, waarde, formule, eenheid }) => {
+    try {
+        const response = await fetch(`${CONFIG.API_BASE_URL}?entity=properties&id=${propertyId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, waarde, formule: formule || '', eenheid: eenheid || '' }),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({ message: 'Unknown error' }));
+            throw new Error(err.message || 'Failed to update property');
+        }
+        Alert.alert('Success', 'Eigenschap bijgewerkt.');
+        return true;
+    } catch (error) {
+        console.error('Error updating property:', error);
+        Alert.alert('Error', error.message);
+        return false;
+    }
+};
+
 export default () => null;

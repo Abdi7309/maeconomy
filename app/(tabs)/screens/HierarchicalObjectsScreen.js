@@ -6,11 +6,8 @@ import AddObjectModal from '../components/modals/AddObjectModal';
 import FilterModal from '../components/modals/FilterModal';
 
 const PropertyButton = ({ onClick }) => (
-    <TouchableOpacity onPress={onClick} style={AppStyles.btnPropertyChevron}>
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <Text style={AppStyles.btnPropertyChevronText}>Eigenschappen</Text>
-            <ChevronRight color={colors.lightGray400} size={16} />
-        </View>
+    <TouchableOpacity onPress={onClick} style={{ paddingVertical: 6, paddingHorizontal: 8 }}>
+        <Text style={{ color: colors.primary, fontWeight: '600' }}>Eigenschappen</Text>
     </TouchableOpacity>
 );
 
@@ -106,6 +103,7 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                                             {(item.children || []).length > 0 ? ` - ${(item.children || []).length} sub-item(s)` : ''}
                                         </Text>
                                     </View>
+                                    <View style={{ width: 1, backgroundColor: colors.lightGray500, marginHorizontal: 10, alignSelf: 'stretch' }} />
                                     <PropertyButton onClick={(e) => {
                                         e.stopPropagation();
                                         setSelectedProperty(item.id);
