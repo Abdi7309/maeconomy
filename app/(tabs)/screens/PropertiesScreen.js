@@ -103,8 +103,7 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
                 <Text style={AppStyles.detailSubtitle}>{(item.properties || []).length} eigenschap{(item.properties || []).length !== 1 ? 'pen' : ''}</Text>
             </View>
             <ScrollView 
-                // --- FIX: Added paddingBottom to prevent FAB from covering content ---
-                contentContainerStyle={[AppStyles.contentPadding, { paddingBottom: 1 }]}
+                contentContainerStyle={[AppStyles.contentPadding, { paddingBottom: 80 }]} // <-- verhoog paddingBottom
                 refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.blue600]} tintColor={colors.blue600} />}
             >
                 <View style={AppStyles.propertyList}>

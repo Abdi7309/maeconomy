@@ -396,7 +396,7 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                 </View>
                 <ScrollView
                     style={{ flex: 1 }}
-                    contentContainerStyle={AppStyles.contentPadding}
+                    contentContainerStyle={[AppStyles.contentPadding, { paddingBottom: 100 }]} // <-- add paddingBottom
                     keyboardShouldPersistTaps="handled"
                 >
                     <View style={[AppStyles.card, { marginTop: 0, marginBottom: 24, padding: 16 }]}>
