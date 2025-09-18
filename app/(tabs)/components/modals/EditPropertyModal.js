@@ -13,9 +13,19 @@ const unitConversionTable = {
     mL:   { L: 1000, mL: 1 }
 };
 
+// Global precision control for numeric outputs
+const DECIMAL_PLACES = 6;
+const roundToDecimals = (value, decimals = DECIMAL_PLACES) => {
+    if (typeof value !== 'number' || !isFinite(value)) return value;
+    const factor = Math.pow(10, decimals);
+    return Math.round(value * factor) / factor;
+};
+
 const convertToUnit = (value, fromUnit, toUnit) => {
     if (!fromUnit || !toUnit || !unitConversionTable[toUnit] || !unitConversionTable[toUnit][fromUnit]) return value;
-    return value * unitConversionTable[toUnit][fromUnit];
+    const factor = unitConversionTable[toUnit][fromUnit];
+    const converted = roundToDecimals(value * factor);
+    return converted;
 };
 
 const buildPropertiesMap = (properties, outputUnit) => {
@@ -37,12 +47,13 @@ const buildPropertiesMap = (properties, outputUnit) => {
                 if (/[^0-9+\-*/().\s]/.test(formula)) {
                     return 'Error';
                 }
-                val = eval(formula);
+                val = roundToDecimals(eval(formula));
             } catch (e) {
                 val = 'Error';
             }
         }
         if (prop.unit && outputUnit) {
+            const beforeUnitVal = Number(val);
             val = convertToUnit(Number(val), prop.unit, outputUnit);
         }
         return val;
@@ -59,13 +70,17 @@ const evaluateFormula = (formula, propertiesMap) => {
     let expression = formula;
     Object.keys(propertiesMap).forEach(key => {
         const regex = new RegExp(`\\b${key}\\b`, 'gi');
+        const before = expression;
         expression = expression.replace(regex, propertiesMap[key]);
+        if (before !== expression) {
+            console.log('[EditPropertyModal] evaluateFormula replace', { key, value: propertiesMap[key], before, after: expression });
+        }
     });
     try {
         if (/[^0-9+\-*/().\s]/.test(expression)) {
             return { value: null, error: 'Onbekende variabelen in formule' };
         }
-        const result = eval(expression);
+        const result = roundToDecimals(eval(expression));
         if (typeof result === 'number' && !isNaN(result)) {
             return { value: result, error: null };
         }
@@ -73,6 +88,15 @@ const evaluateFormula = (formula, propertiesMap) => {
     } catch (e) {
         return { value: null, error: 'Formule kon niet worden berekend' };
     }
+};
+
+// Helper for illustrating floating-point vs rounded output in logs only
+const formatNumberForLog = (n, decimals = 6) => {
+    if (typeof n !== 'number' || isNaN(n)) return { raw: n, toFixed: null, rounded: null, trimmed: null };
+    const fixed = n.toFixed(decimals);
+    const rounded = Number(fixed);
+    const trimmed = String(rounded).replace(/\.?0+$/, '');
+    return { raw: n, toFixed: fixed, rounded, trimmed };
 };
 
 const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft, onSaved }) => {
@@ -102,14 +126,22 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
                 : p.waarde,
             unit: p.eenheid || ''
         }));
-        return buildPropertiesMap(props, editedUnit || 'm');
+        const result = buildPropertiesMap(props, editedUnit || 'm');
+        return result;
     }, [existingPropertiesDraft, editedUnit]);
 
     const preview = useMemo(() => {
-        if (!editedFormula || !/[+\-*/]/.test(editedFormula)) return { text: null, error: null };
+        if (!editedFormula || !/[+\-*/]/.test(editedFormula)) {
+            return { text: null, error: null };
+        }
         const { value, error } = evaluateFormula(editedFormula, mapForUnit);
+        const numericLog = formatNumberForLog(value, 6);
+        console.log('[EditPropertyModal] preview evaluation', { editedFormula, rawResult: value, ...numericLog, error });
         if (error) return { text: error, error: true };
-        return { text: `${value}${editedUnit ? ` ${editedUnit}` : ''}`, error: false };
+        const roundedForPreview = roundToDecimals(value);
+        const finalText = `${roundedForPreview}${editedUnit ? ` ${editedUnit}` : ''}`;
+        console.log('[EditPropertyModal] preview final', { finalText });
+        return { text: finalText, error: false };
     }, [editedFormula, mapForUnit, editedUnit]);
 
     const handleSave = async () => {
@@ -123,22 +155,24 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
             if (error) {
                 waardeToSave = 'Error';
             } else {
-                waardeToSave = String(evalResult);
+                waardeToSave = String(roundToDecimals(evalResult));
             }
+            // keep logs minimal — no save-time logs
         } else {
             const fromUnit = property?.eenheid || '';
             const toUnit = eenheidToSave;
             if (fromUnit && toUnit && fromUnit !== toUnit && !isNaN(Number(waardeToSave))) {
-                waardeToSave = String(convertToUnit(Number(waardeToSave), fromUnit, toUnit));
+                waardeToSave = String(roundToDecimals(convertToUnit(Number(waardeToSave), fromUnit, toUnit)));
             }
         }
 
-        const success = await updateProperty(property.id, {
+        const payload = {
             name: editedName && editedName.trim() !== '' ? editedName : property.name,
             waarde: waardeToSave,
             formule: formuleToSave,
             eenheid: eenheidToSave,
-        });
+        };
+        const success = await updateProperty(property.id, payload);
         if (success) {
             onSaved({
                 name: editedName && editedName.trim() !== '' ? editedName : property.name,
@@ -170,7 +204,7 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
                     <TextInput
                         placeholder="Bijv. lengte * breedte"
                         value={editedFormula}
-                        onChangeText={setEditedFormula}
+                        onChangeText={(text) => { setEditedFormula(text); }}
                         style={AppStyles.formInput}
                     />
                     {editedFormula && /[+\-*/]/.test(editedFormula) && (

@@ -122,6 +122,14 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
 
     const allUnits = ['m', 'cm', 'mm', 'kg', 'g', 'L', 'mL'];
 
+    // Consistent rounding with modal
+    const DECIMAL_PLACES = 6;
+    const roundToDecimals = (value, decimals = DECIMAL_PLACES) => {
+        if (typeof value !== 'number' || !isFinite(value)) return value;
+        const factor = Math.pow(10, decimals);
+        return Math.round(value * factor) / factor;
+    };
+
     // Initialize or refresh the draft when item.properties changes
     useEffect(() => {
         const draft = (item.properties || []).map(p => ({
@@ -336,6 +344,22 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
         return buildPropertiesMap(props, outputUnit);
     };
 
+    // Draft-parameterized variant for recomputation after modal save
+    const buildExistingPropertiesMapFromDraft = (draft, outputUnit) => {
+        const props = (draft || []).map(p => ({
+            name: p.name,
+            value: p.formule && /[+\-*/]/.test(p.formule)
+                ? (() => {
+                    const innerMap = buildPropertiesMap(draft.map(x => ({ name: x.name, value: x.waarde, unit: x.eenheid || '' })), p.eenheid || outputUnit);
+                    const { value: innerVal, error: innerErr } = evaluateFormula(p.formule, innerMap);
+                    return innerErr ? 'Error' : String(innerVal);
+                })()
+                : p.waarde,
+            unit: p.eenheid || ''
+        }));
+        return buildPropertiesMap(props, outputUnit);
+    };
+
     return (
         <View style={[AppStyles.screen, { backgroundColor: colors.white, flex: 1 }]}>
             {Platform.OS === 'web' && (
@@ -485,10 +509,45 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                             existingPropertiesDraft={existingPropertiesDraft}
                             onSaved={(updated) => {
                                 const idx = modalPropertyIndex;
+                                // 1) Apply direct update to the selected property in both sources
                                 if (item.properties && item.properties[idx]) {
                                     item.properties[idx] = { ...item.properties[idx], ...updated };
                                 }
-                                setExistingPropertiesDraft(prev => prev.map((p, i) => i === idx ? { ...p, name: updated.name, waarde: updated.waarde, formule: updated.formule, eenheid: updated.eenheid } : p));
+                                const baselineDraft = existingPropertiesDraft.map((p, i) => (
+                                    i === idx
+                                        ? { ...p, name: updated.name, waarde: updated.waarde, formule: updated.formule, eenheid: updated.eenheid }
+                                        : p
+                                ));
+
+                                // 2) Recompute all draft values for properties that have formulas
+                                const recomputedDraft = baselineDraft.map(p => {
+                                    if (p.formule && /[+\-*/]/.test(p.formule)) {
+                                        const outputUnit = p.eenheid || '';
+                                        const map = buildExistingPropertiesMapFromDraft(baselineDraft, outputUnit);
+                                        const { value, error } = evaluateFormula(p.formule, map);
+                                        if (error || value === null) {
+                                            return { ...p, waarde: 'Error' };
+                                        }
+                                        const rounded = roundToDecimals(value);
+                                        return { ...p, waarde: String(rounded) };
+                                    }
+                                    return p;
+                                });
+
+                                // 3) Write recomputed values back to item.properties so the UI list updates
+                                if (item.properties && Array.isArray(item.properties)) {
+                                    item.properties.forEach((prop, i) => {
+                                        const newVal = recomputedDraft[i];
+                                        if (newVal) {
+                                            prop.name = newVal.name;
+                                            prop.waarde = newVal.waarde;
+                                            prop.formule = newVal.formule;
+                                            prop.eenheid = newVal.eenheid;
+                                        }
+                                    });
+                                }
+
+                                setExistingPropertiesDraft(recomputedDraft);
                                 setShowEditModal(false);
                                 setModalPropertyIndex(null);
                             }}
