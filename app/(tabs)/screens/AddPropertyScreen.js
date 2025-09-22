@@ -420,7 +420,7 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                 </View>
                 <ScrollView
                     style={{ flex: 1 }}
-                    contentContainerStyle={[AppStyles.contentPadding, { paddingBottom: 100 }]} // <-- add paddingBottom
+                    contentContainerStyle={[AppStyles.contentPadding, { paddingBottom: 70 }]} // <-- add paddingBottom
                     keyboardShouldPersistTaps="handled"
                 >
                     <View style={[AppStyles.card, { marginTop: 0, marginBottom: 24, padding: 16 }]}>
@@ -751,11 +751,9 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                         </TouchableOpacity>
                     </View>
                 </ScrollView>
-                <View style={{ flexDirection: 'row', position: 'absolute', bottom: 20, right: 20 }}>
-                    <TouchableOpacity onPress={addNewPropertyField} style={AppStyles.fab}>
-                        <Plus color="white" size={24} />
-                    </TouchableOpacity>
-                </View>
+                <TouchableOpacity onPress={addNewPropertyField} style={AppStyles.fab}>
+                    <Plus color="white" size={24} />
+                </TouchableOpacity>
             </KeyboardAvoidingView>
         </View>
     );
