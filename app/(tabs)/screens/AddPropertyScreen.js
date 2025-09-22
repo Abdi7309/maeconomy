@@ -420,7 +420,7 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                 </View>
                 <ScrollView
                     style={{ flex: 1 }}
-                    contentContainerStyle={[AppStyles.contentPadding, { paddingBottom: 70 }]} // <-- add paddingBottom
+                    contentContainerStyle={[AppStyles.contentPadding, { paddingBottom: 70 }]} 
                     keyboardShouldPersistTaps="handled"
                 >
                     <View style={[AppStyles.card, { marginTop: 0, marginBottom: 24, padding: 16 }]}>
@@ -510,6 +510,16 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                             onSaved={(updated) => {
                                 const idx = modalPropertyIndex;
                                 // 1) Apply direct update to the selected property in both sources
+                                if (updated && updated.__deleted) {
+                                    // Remove from item.properties and draft
+                                    if (item.properties && item.properties[idx]) {
+                                        item.properties.splice(idx, 1);
+                                    }
+                                    setExistingPropertiesDraft(prev => prev.filter((_, i) => i !== idx));
+                                    setShowEditModal(false);
+                                    setModalPropertyIndex(null);
+                                    return;
+                                }
                                 if (item.properties && item.properties[idx]) {
                                     item.properties[idx] = { ...item.properties[idx], ...updated };
                                 }

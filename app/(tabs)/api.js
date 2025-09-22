@@ -217,4 +217,22 @@ export const updateProperty = async (propertyId, { name, waarde, formule, eenhei
     }
 };
 
+export const deleteProperty = async (propertyId) => {
+    try {
+        const response = await fetch(`${CONFIG.API_BASE_URL}?entity=properties&id=${propertyId}`, {
+            method: 'DELETE'
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({ message: 'Unknown error' }));
+            throw new Error(err.message || 'Failed to delete property');
+        }
+        Alert.alert('Success', 'Eigenschap verwijderd.');
+        return true;
+    } catch (error) {
+        console.error('Error deleting property:', error);
+        Alert.alert('Error', error.message);
+        return false;
+    }
+};
+
 export default () => null;

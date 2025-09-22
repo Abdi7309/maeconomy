@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Modal, Platform, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import AppStyles, { colors } from '../../AppStyles';
-import { updateProperty } from '../../api';
+import { deleteProperty, updateProperty } from '../../api';
 
 const unitConversionTable = {
     m:    { m: 1, cm: 0.01, mm: 0.001 },
@@ -184,6 +184,15 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
         }
     };
 
+    const handleDelete = async () => {
+        if (!property?.id) { onClose(); return; }
+        const success = await deleteProperty(property.id);
+        if (success) {
+            onSaved({ __deleted: true, id: property.id });
+            onClose();
+        }
+    };
+
     if (!visible) return null;
 
     return (
@@ -231,13 +240,18 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
                         style={AppStyles.formInput}
                     />
 
-                    <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 16 }}>
-                        <TouchableOpacity onPress={handleSave}>
-                            <Text>Opslaan</Text>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 16 }}>
+                        <TouchableOpacity onPress={handleDelete} style={{ paddingVertical: 10, paddingHorizontal: 14, backgroundColor: colors.red600, borderRadius: 8 }}>
+                            <Text style={{ color: colors.white, fontWeight: '600' }}>Verwijder</Text>
                         </TouchableOpacity>
-                        <TouchableOpacity style={{ marginLeft: 12 }} onPress={onClose}>
-                            <Text>Annuleer</Text>
-                        </TouchableOpacity>
+                        <View style={{ flexDirection: 'row' }}>
+                            <TouchableOpacity onPress={onClose} style={{ paddingVertical: 10, paddingHorizontal: 14, backgroundColor: colors.lightGray200, borderRadius: 8, marginRight: 8 }}>
+                                <Text style={{ color: colors.lightGray800, fontWeight: '600' }}>Annuleer</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity onPress={handleSave} style={{ paddingVertical: 10, paddingHorizontal: 14, backgroundColor: colors.blue600, borderRadius: 8 }}>
+                                <Text style={{ color: colors.white, fontWeight: '600' }}>Opslaan</Text>
+                            </TouchableOpacity>
+                        </View>
                     </View>
                 </View>
             </View>

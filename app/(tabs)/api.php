@@ -97,7 +97,7 @@ function fetchItemWithHierarchy($pdo, $id) {
     }
 
     // Fetch properties for the current object (using 'eigenschappen' table)
-    $stmt_prop = $pdo->prepare("SELECT id, object_id, name, waarde, formule, eenheid, created_at, updated_at FROM eigenschappen WHERE object_id = ?");
+    $stmt_prop = $pdo->prepare("SELECT id, object_id, name, waarde, formule, eenheid, created_at, updated_at FROM eigenschappen WHERE object_id = ? ORDER BY created_at ASC, id ASC");
     $stmt_prop->execute([$item['id']]);
     $properties = $stmt_prop->fetchAll();
 
@@ -363,7 +363,7 @@ switch ($entity) {
                     echo json_encode(["message" => "Missing 'object_id' for properties query."]);
                     break;
                 }
-                $stmt = $pdo->prepare("SELECT id, object_id, name, waarde, formule, eenheid, created_at, updated_at FROM eigenschappen WHERE object_id = ? ORDER BY name ASC");
+                $stmt = $pdo->prepare("SELECT id, object_id, name, waarde, formule, eenheid, created_at, updated_at FROM eigenschappen WHERE object_id = ? ORDER BY created_at ASC, id ASC");
                 $stmt->execute([$object_id]);
                 $properties = $stmt->fetchAll();
                 http_response_code(200);
