@@ -491,6 +491,15 @@ const AppStyles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
     },
+    // Backward-compatible names used by some modals (FormulaPickerModal, AddFormulaModal)
+    // Keep these separate so we can tweak widths independently if needed.
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.45)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 16,
+    },
     modalContent: {
         backgroundColor: 'white',
         borderRadius: 16,
@@ -499,6 +508,20 @@ const AppStyles = StyleSheet.create({
         maxWidth: IS_DESKTOP ? 700 : '90%', // Max width for desktop modals
         maxHeight: '80%',
         shadowColor: colors.black, // Apply shadows from the AppStyles
+        shadowOffset: shadows.md.shadowOffset,
+        shadowOpacity: shadows.md.shadowOpacity,
+        shadowRadius: shadows.md.shadowRadius,
+        elevation: shadows.md.elevation,
+    },
+    modalContainer: {
+        backgroundColor: colors.white,
+        borderRadius: 16,
+        paddingVertical: 8,
+        paddingHorizontal: 16,
+        width: IS_DESKTOP ? '40%' : '92%',
+        maxWidth: 760,
+        maxHeight: '82%',
+        shadowColor: colors.black,
         shadowOffset: shadows.md.shadowOffset,
         shadowOpacity: shadows.md.shadowOpacity,
         shadowRadius: shadows.md.shadowRadius,

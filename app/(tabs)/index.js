@@ -1,20 +1,21 @@
-import { useState, useEffect } from 'react';
-import { View, ActivityIndicator, Alert } from 'react-native';
-import AppStyles, { colors } from './AppStyles'; 
+import AsyncStorage from '@react-native-async-storage/async-storage'; // --- 1. IMPORT ASYNCSTORAGE ---
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, View } from 'react-native';
+import {
+    handleAddObject as apiAddObject,
+    addProperties as apiAddProperties,
+    fetchAndSetAllObjects as apiFetchObjects,
+    fetchTemplates as apiFetchTemplates,
+    handleLogin as apiLogin,
+    handleRegister as apiRegister,
+    updateProperty as apiUpdateProperty,
+    fetchAllUsers
+} from './api';
+import AppStyles, { colors } from './AppStyles';
+import AddPropertyScreen from './screens/AddPropertyScreen';
 import AuthScreen from './screens/AuthScreen';
 import HierarchicalObjectsScreen from './screens/HierarchicalObjectsScreen';
 import PropertiesScreen from './screens/PropertiesScreen';
-import AddPropertyScreen from './screens/AddPropertyScreen';
-import { 
-    fetchAllUsers, 
-    handleLogin as apiLogin, 
-    handleRegister as apiRegister, 
-    fetchAndSetAllObjects as apiFetchObjects, 
-    fetchTemplates as apiFetchTemplates, 
-    handleAddObject as apiAddObject,
-    addProperties as apiAddProperties
-} from './api';
-import AsyncStorage from '@react-native-async-storage/async-storage'; // --- 1. IMPORT ASYNCSTORAGE ---
 
 const App = () => {
     const [userToken, setUserToken] = useState(null);
@@ -166,6 +167,12 @@ const App = () => {
         return success;
     };
 
+    const handleUpdateProperty = async (propertyId, payload) => {
+        const success = await apiUpdateProperty(propertyId, payload);
+        // No automatic refresh here to prevent UI jumps. The calling screen handles the local state.
+        return success;
+    };
+
     const findItemByPath = (data, path) => {
         let currentItems = data;
         let foundItem = null;
@@ -250,6 +257,7 @@ const App = () => {
                         fetchedTemplates={fetchedTemplates}
                         setCurrentScreen={setCurrentScreen}
                         onSave={handleAddProperties}
+                        onUpdate={handleUpdateProperty}
                         onTemplateAdded={handleFetchTemplates}
                         findItemByPath={findItemByPath}
                     />

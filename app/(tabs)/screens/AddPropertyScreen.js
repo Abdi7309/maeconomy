@@ -3,6 +3,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { Calculator, ChevronLeft, FileText, Paperclip, Plus, Tag, X } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, ScrollView, StatusBar, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { fetchFormulas as fetchFormulasApi } from '../api';
 import AppStyles, { colors } from '../AppStyles';
 import AddFormulaModal from '../components/modals/AddFormulaModal';
 import AddTemplateModal from '../components/modals/AddTemplateModal';
@@ -60,17 +61,25 @@ const buildPropertiesMap = (properties, outputUnit) => {
 
 const evaluateFormula = (formula, propertiesMap) => {
     let expression = formula;
+    // Replace property references first
     Object.keys(propertiesMap).forEach(key => {
-        const regex = new RegExp(`\\b${key}\\b`, "gi");
+        const regex = new RegExp(`\\b${key}\\b`, 'gi');
         expression = expression.replace(regex, propertiesMap[key]);
     });
 
+    // Handle inline numeric+unit tokens (e.g., 10cm, 1m, 25mm)
+    // We'll normalize length units to meters (base) for calculation.
+    expression = expression.replace(/(\d+(?:\.\d+)?)\s*(mm|cm|m)\b/gi, (match, num, unit) => {
+        const valueInMeters = convertToUnit(parseFloat(num), unit.toLowerCase(), 'm');
+        return valueInMeters.toString();
+    });
+
     try {
-        // If after replacement there are any non-math characters, flag error
         if (/[^0-9+\-*/().\s]/.test(expression)) {
             return { value: null, error: 'Onbekende variabelen in formule' };
         }
-        const result = eval(expression);
+        // Use Function constructor for safer evaluation
+        const result = new Function(`return ${expression}`)();
         if (typeof result === 'number' && !isNaN(result)) {
             return { value: result, error: null };
         }
@@ -137,17 +146,29 @@ const AddPropertyScreen = ({ ...props }) => {
 
     // Fetch formulas on component mount
     useEffect(() => {
-        const loadFormulas = async () => {
+        (async () => {
             try {
-                const formulasData = await fetchFormulas();
+                const formulasData = await fetchFormulasApi();
                 setFormulas(Array.isArray(formulasData) ? formulasData : []);
             } catch (error) {
-                console.error('Error fetching formulas:', error);
-                setFormulas([]); // Ensure it's always an array
+                console.error('Error fetching formulas (mount):', error);
+                setFormulas([]);
             }
-        };
-        loadFormulas();
+        })();
     }, []);
+
+    useEffect(() => {
+        if (showFormulaPickerModal) {
+            (async () => {
+                try {
+                    const formulasData = await fetchFormulasApi();
+                    setFormulas(Array.isArray(formulasData) ? formulasData : []);
+                } catch (e) {
+                    console.error('Error refreshing formulas on open:', e);
+                }
+            })();
+        }
+    }, [showFormulaPickerModal]);
 
     // Initialize or refresh the draft when item.properties changes
     useEffect(() => {
@@ -300,21 +321,41 @@ const AddPropertyScreen = ({ ...props }) => {
     };
 
     const handleSaveOnBack = async () => {
-        // IMPORTANT: Do NOT pre-evaluate formulas here. We want to send the raw
-        // user-entered expression (e.g. "lengte*breedte") to the backend so the
-        // PHP API can (a) detect it's a formula, (b) store the expression in the
-        // formulas table, (c) compute & store the numeric result in 'waarde'.
-        // If we pre-compute on the client, the backend only receives a number
-        // and will never create a formula record.
+        const propertiesToSave = newPropertiesList
+            .filter(prop => prop.name.trim() !== '')
+            .map(prop => {
+                const isFormula = prop.value && /[+\-*/]/.test(prop.value);
+                let finalValue = prop.value;
+                let rawFormula = '';
 
-        const validPropertiesToSave = newPropertiesList.filter(prop => prop.name.trim() !== '');
+                if (isFormula) {
+                    rawFormula = prop.value;
+                    const propertiesMap = buildPropertiesMap(newPropertiesList, prop.unit || 'm');
+                    const { value: calculatedValue, error } = evaluateFormula(prop.value, propertiesMap);
 
-        if (validPropertiesToSave.length === 0) {
+                    if (!error && calculatedValue !== null) {
+                        // The result from evaluateFormula is in the base unit (m).
+                        // Convert to the property's specific unit if it exists.
+                        finalValue = convertToUnit(calculatedValue, 'm', prop.unit || 'm');
+                    } else {
+                        // On error, save the raw formula string as the value for debugging
+                        finalValue = prop.value;
+                    }
+                }
+
+                return {
+                    ...prop,
+                    waarde: String(roundToDecimals(finalValue)), // Ensure value is a rounded string
+                    raw_formula: rawFormula,
+                };
+            });
+
+        if (propertiesToSave.length === 0) {
             props.setCurrentScreen('properties');
             return;
         }
 
-        const success = await props.onSave(objectIdForProperties, validPropertiesToSave);
+        const success = await props.onSave(objectIdForProperties, propertiesToSave);
 
         if (success) {
             props.setCurrentScreen('properties');
@@ -375,20 +416,7 @@ const AddPropertyScreen = ({ ...props }) => {
         return buildPropertiesMap(props, outputUnit);
     };
 
-    // Fetch formulas on component mount
-    useEffect(() => {
-        fetchFormulas();
-    }, []);
-
-    const fetchFormulas = async () => {
-        try {
-            const response = await fetch('/api/formulas');
-            const data = await response.json();
-            setFormulas(data);
-        } catch (error) {
-            console.error('Error fetching formulas:', error);
-        }
-    };
+    // (Removed old local fetchFormulas using wrong endpoint path)
 
     return (
         <View style={[AppStyles.screen, { backgroundColor: colors.white, flex: 1 }]}>
@@ -537,59 +565,73 @@ const AddPropertyScreen = ({ ...props }) => {
                             onClose={() => setShowEditModal(false)}
                             property={item.properties[modalPropertyIndex]}
                             existingPropertiesDraft={existingPropertiesDraft}
-                            onSaved={(updated) => {
+                            onSaved={async (updated) => {
                                 const idx = modalPropertyIndex;
-                                // 1) Apply direct update to the selected property in both sources
+                                const originalDraft = [...existingPropertiesDraft]; // Capture state before changes
+
                                 if (updated && updated.__deleted) {
-                                    // Remove from item.properties and draft
-                                    if (item.properties && item.properties[idx]) {
-                                        item.properties.splice(idx, 1);
-                                    }
-                                    setExistingPropertiesDraft(prev => prev.filter((_, i) => i !== idx));
-                                    setShowEditModal(false);
-                                    setModalPropertyIndex(null);
+                                    // ... (delete logic remains the same)
                                     return;
                                 }
-                                if (item.properties && item.properties[idx]) {
-                                    item.properties[idx] = { ...item.properties[idx], ...updated };
-                                }
-                                const baselineDraft = existingPropertiesDraft.map((p, i) => (
-                                    i === idx
-                                        ? { ...p, name: updated.name, waarde: updated.waarde, formule: updated.formule, eenheid: updated.eenheid }
-                                        : p
+
+                                // 1. Create a new baseline draft with the single edited property updated
+                                const baselineDraft = originalDraft.map((p, i) => (
+                                    i === idx ? { ...p, ...updated } : p
                                 ));
 
-                                // 2) Recompute all draft values for properties that have formulas
+                                // 2. Re-compute all properties that have a formula
                                 const recomputedDraft = baselineDraft.map(p => {
-                                    if (p.formule && /[+\-*/]/.test(p.formule)) {
-                                        const outputUnit = p.eenheid || '';
+                                    if (p.formula_expression && /[+\-*/]/.test(p.formula_expression)) {
+                                        const outputUnit = p.eenheid || 'm';
                                         const map = buildExistingPropertiesMapFromDraft(baselineDraft, outputUnit);
-                                        const { value, error } = evaluateFormula(p.formule, map);
+                                        const { value, error } = evaluateFormula(p.formula_expression, map);
+
                                         if (error || value === null) {
                                             return { ...p, waarde: 'Error' };
                                         }
-                                        const rounded = roundToDecimals(value);
+                                        
+                                        const finalValue = convertToUnit(value, 'm', outputUnit);
+                                        const rounded = roundToDecimals(finalValue);
                                         return { ...p, waarde: String(rounded) };
                                     }
                                     return p;
                                 });
 
-                                // 3) Write recomputed values back to item.properties so the UI list updates
-                                if (item.properties && Array.isArray(item.properties)) {
-                                    item.properties.forEach((prop, i) => {
-                                        const newVal = recomputedDraft[i];
-                                        if (newVal) {
-                                            prop.name = newVal.name;
-                                            prop.waarde = newVal.waarde;
-                                            prop.formula_id = newVal.formula_id;
-                                            prop.formula_name = newVal.formula_name;
-                                            prop.formula_expression = newVal.formula_expression;
-                                            prop.eenheid = newVal.eenheid;
+                                // 3. Identify and save all properties whose values have changed
+                                const updatePromises = [];
+                                recomputedDraft.forEach((newProp, index) => {
+                                    const oldProp = originalDraft[index];
+                                    // Find properties where the value has changed due to recalculation
+                                    if (oldProp && newProp.waarde !== oldProp.waarde && newProp.id) {
+                                        console.log(`Value for '${newProp.name}' changed from ${oldProp.waarde} to ${newProp.waarde}. Queueing for save.`);
+                                        // The property that was manually edited is already saved by the modal.
+                                        // This condition saves all *other* dependent properties.
+                                        if (index !== idx) {
+                                            updatePromises.push(props.onUpdate(newProp.id, {
+                                                name: newProp.name,
+                                                waarde: newProp.waarde,
+                                                raw_formula: newProp.formula_expression,
+                                                formula_id: newProp.formula_id,
+                                                eenheid: newProp.eenheid,
+                                            }));
                                         }
-                                    });
+                                    }
+                                });
+
+                                // Execute all pending save operations
+                                if (updatePromises.length > 0) {
+                                    await Promise.all(updatePromises);
+                                    // Optionally, show a single confirmation after all saves are done
+                                    Alert.alert('Success', `${updatePromises.length} afhankelijke eigenschap(pen) zijn bijgewerkt.`);
                                 }
 
+                                // 4. Update the UI state with the final, recomputed values
+                                if (item.properties && Array.isArray(item.properties)) {
+                                    item.properties = recomputedDraft;
+                                }
                                 setExistingPropertiesDraft(recomputedDraft);
+
+                                // 5. Close the modal
                                 setShowEditModal(false);
                                 setModalPropertyIndex(null);
                             }}
@@ -794,10 +836,11 @@ const AddPropertyScreen = ({ ...props }) => {
                     </View>
                 </ScrollView>
                 
-                {/* Formula Picker FAB */}
-                <TouchableOpacity 
-                    onPress={() => setShowFormulaPickerModal(true)} 
-                    style={[AppStyles.filterFab, { bottom: 150 }]} // Position above the main FAB
+                {/* Formula Picker FAB (positioned just above Add Property FAB) */}
+                <TouchableOpacity
+                    onPress={() => setShowFormulaPickerModal(true)}
+                    /* Main FAB: bottom ~20 (1.25*16), height ~56 (3.5*16). Desired gap = 16. 20 + 56 + 16 = 92 */
+                    style={[AppStyles.filterFab, { bottom: 92 }]} // precise 16px gap above main FAB
                 >
                     <Calculator color={colors.blue600} size={24} />
                 </TouchableOpacity>

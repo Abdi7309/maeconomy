@@ -4,6 +4,13 @@ ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
+// Optional debug logging helper – only logs when &debug=1 is present
+function debug_log($msg) {
+    if (isset($_GET['debug']) && $_GET['debug'] == '1') {
+        error_log($msg);
+    }
+}
+
 // Set headers for CORS (Cross-Origin Resource Sharing)
 header("Access-Control-Allow-Origin: *");
 header("Content-Type: application/json; charset=UTF-8");
@@ -94,7 +101,7 @@ function isFormulaCandidate($value) {
 }
 
 // --- HELPER FUNCTION to create or find existing formula ---
-function handleFormula($pdo, $formulaExpression, $objectId) {
+function handleFormula($pdo, $formulaExpression, $objectId, $propertyName = null) {
     $formulaExpression = trim($formulaExpression);
     
     // First, check if this exact formula already exists
@@ -106,8 +113,50 @@ function handleFormula($pdo, $formulaExpression, $objectId) {
         return $existingFormula['id'];
     }
     
-    // If not found, create a new formula with auto-generated name
-    $formulaName = "Auto_" . substr(md5($formulaExpression . time()), 0, 8);
+    // Build a more descriptive auto name: "PropertyName (ObjectName)"
+    // Fallback gracefully if pieces missing.
+    $objectName = null;
+    try {
+        $stmtObj = $pdo->prepare("SELECT naam FROM objects WHERE id = ? LIMIT 1");
+        $stmtObj->execute([$objectId]);
+        $rowObj = $stmtObj->fetch();
+        if ($rowObj && !empty($rowObj['naam'])) {
+            $objectName = $rowObj['naam'];
+        }
+    } catch (Exception $e) {
+        // ignore, will fallback
+    }
+
+    $cleanProp = $propertyName ? trim($propertyName) : null;
+    $cleanObj  = $objectName ? trim($objectName) : null;
+
+    if ($cleanProp && $cleanObj) {
+        $base = $cleanProp . ' (' . $cleanObj . ')';
+    } elseif ($cleanProp) {
+        $base = $cleanProp;
+    } elseif ($cleanObj) {
+        $base = $cleanObj;
+    } else {
+        $base = 'Formule';
+    }
+
+    // Ensure uniqueness by checking existing names and adding numeric suffix if needed
+    $formulaName = $base;
+    $suffix = 1;
+    while (true) {
+        $stmtNameCheck = $pdo->prepare("SELECT id FROM formulas WHERE name = ? LIMIT 1");
+        $stmtNameCheck->execute([$formulaName]);
+        $exists = $stmtNameCheck->fetch();
+        if (!$exists) {
+            break; // unique
+        }
+        $suffix++;
+        $formulaName = $base . ' ' . $suffix;
+        if ($suffix > 50) { // safety to avoid infinite loop
+            $formulaName = $base . ' ' . uniqid();
+            break;
+        }
+    }
     
     $stmt = $pdo->prepare("INSERT INTO formulas (name, formula, created_at, updated_at) VALUES (?, ?, NOW(), NOW())");
     $stmt->execute([$formulaName, $formulaExpression]);
@@ -121,33 +170,63 @@ function evaluateFormula($pdo, $formulaExpression, $objectId) {
     $stmt = $pdo->prepare("SELECT name, waarde FROM eigenschappen WHERE object_id = ?");
     $stmt->execute([$objectId]);
     $properties = $stmt->fetchAll();
-    
+
+    $originalExpression = $formulaExpression;
     $expression = $formulaExpression;
-    
+
     // Replace property names with their values in the formula
     foreach ($properties as $prop) {
         if (!empty($prop['name']) && is_numeric($prop['waarde'])) {
             $expression = preg_replace('/\b' . preg_quote($prop['name'], '/') . '\b/i', $prop['waarde'], $expression);
         }
     }
-    
-    // Check if there are still letters in the expression (unknown variables)
+
+    $beforeNormalization = $expression;
+
+    // Normalize inline length units to meters (e.g., 10cm -> 0.1, 5mm -> 0.005) BEFORE letter check.
+    // We only handle mm, cm, m. If you later add other unit families, extend this carefully.
+    // Allow optional spaces and also operator immediately after unit (10cm*1m) and closing parenthesis.
+    $expression = preg_replace_callback('/(\d+(?:\.\d+)?)[ ]*(mm|cm|m)(?=\b|\*|\/|\+|\-|\)|$)/i', function($matches) {
+        $value = (float)$matches[1];
+        $unit  = strtolower($matches[2]);
+        switch ($unit) {
+            case 'mm': return (string)($value / 1000); // mm -> m
+            case 'cm': return (string)($value / 100);  // cm -> m
+            case 'm':
+            default:  return (string)$value;          // already meters
+        }
+    }, $expression);
+
+    // Extra defensive cleanup: collapse multiple spaces
+    $expression = preg_replace('/\s+/', ' ', $expression);
+    // Remove spaces around operators to standardize
+    $expression = preg_replace('/\s*([+\-*\/()])\s*/', '$1', $expression);
+
+    debug_log("[EVAL] object=$objectId raw='{$originalExpression}' substituted='{$beforeNormalization}' normalized='{$expression}'");
+
+    // After normalization, reject if unknown letters remain
     if (preg_match('/[a-zA-Z]/', $expression)) {
-        return null; // Cannot calculate due to unknown variables
+        debug_log("[EVAL] reject remaining letters in '{$expression}'");
+        return null; // Cannot calculate due to unknown (non-unit) variables
     }
-    
+
     // Safely evaluate the mathematical expression
     try {
         // Only allow numbers, operators, parentheses, and whitespace
-        if (preg_match('/^[0-9+\-*\/().\s]+$/', $expression)) {
+        if (preg_match('/^[0-9+\-*\/.\s]+$/', $expression)) {
             $result = eval("return $expression;");
-            return is_numeric($result) ? $result : null;
+            if (is_numeric($result)) {
+                debug_log("[EVAL] result='{$result}'");
+                return $result;
+            }
+        } else {
+            debug_log("[EVAL] invalid chars in expression '{$expression}'");
         }
     } catch (Exception $e) {
-        // Calculation failed
+        debug_log("[EVAL] exception: " . $e->getMessage());
         return null;
     }
-    
+
     return null;
 }
 
@@ -450,6 +529,7 @@ switch ($entity) {
                 $object_id = $_POST['object_id'];
                 $name = $_POST['name'];
                 $waarde = $_POST['waarde'] ?? '';
+                $raw_formula = $_POST['raw_formula'] ?? '';
                 $formula_id = $_POST['formula_id'] ?? null;
                 // Convert empty string to null for foreign key constraint
                 if ($formula_id === '' || $formula_id === 'null') {
@@ -467,25 +547,28 @@ switch ($entity) {
                     error_log("[PROPERTY POST] detect operators=" . ($hasOperators?1:0) . " letters=" . ($hasLetters?1:0));
 
                     // Use broader candidate detection so even pure numeric expressions like 2*3 are treated as formulas
-                    if ($original_input_waarde !== '' && isFormulaCandidate($original_input_waarde)) {
-                        $expr = trim($original_input_waarde);
+                    $candidateExpr = $raw_formula !== '' ? $raw_formula : $original_input_waarde;
+                    if ($candidateExpr !== '' && isFormulaCandidate($candidateExpr)) {
+                        $expr = trim($candidateExpr);
                         try {
-                            $formula_id = handleFormula($pdo, $expr, $object_id);
+                            $formula_id = handleFormula($pdo, $expr, $object_id, $name);
                             error_log("[PROPERTY POST] formula stored/linked id=$formula_id expr='$expr'");
                         } catch (Exception $fe) {
                             error_log("[PROPERTY POST] ERROR inserting formula expr='$expr' msg=" . $fe->getMessage());
                             throw $fe; // abort transaction
                         }
-
-                        // Evaluate AFTER storing (so re-use expression). Evaluation uses existing properties only.
-                        $calculatedValue = evaluateFormula($pdo, $expr, $object_id);
-                        if ($calculatedValue !== null) {
-                            $waarde = (string)$calculatedValue; // success numeric result
-                            error_log("[PROPERTY POST] evaluation success result='$waarde'");
+                        if ($raw_formula !== '' && $original_input_waarde !== '' && is_numeric($original_input_waarde)) {
+                            $waarde = $original_input_waarde; // trust client preview numeric
+                            error_log("[PROPERTY POST] using client preview value='$waarde'");
                         } else {
-                            // Do NOT leave expression in waarde – store empty (user requirement)
-                            $waarde = '';
-                            error_log("[PROPERTY POST] evaluation failed; storing empty waarde and keeping expr in formulas table");
+                            $calculatedValue = evaluateFormula($pdo, $expr, $object_id);
+                            if ($calculatedValue !== null) {
+                                $waarde = (string)$calculatedValue;
+                                error_log("[PROPERTY POST] evaluation success result='$waarde'");
+                            } else {
+                                $waarde = '';
+                                error_log("[PROPERTY POST] evaluation failed; storing empty waarde");
+                            }
                         }
                     } else {
                         error_log("[PROPERTY POST] not a formula candidate – storing raw value");
@@ -563,6 +646,7 @@ switch ($entity) {
                 }
                 
                 $incoming_waarde = $input['waarde'];
+                $raw_formula = $input['raw_formula'] ?? '';
                 $formula_id = $input['formula_id'] ?? null;
                 // Convert empty string to null for foreign key constraint
                 if ($formula_id === '' || $formula_id === 'null') {
@@ -585,10 +669,11 @@ switch ($entity) {
                 
                 error_log("[PROPERTY PUT] id=$id raw_waarde='$incoming_waarde'");
                 $computed_waarde = $incoming_waarde;
-                if ($incoming_waarde !== '' && isFormulaCandidate($incoming_waarde)) {
-                    $expr = trim($incoming_waarde);
+                $candidateExpr = $raw_formula !== '' ? $raw_formula : $incoming_waarde;
+                if ($candidateExpr !== '' && isFormulaCandidate($candidateExpr)) {
+                    $expr = trim($candidateExpr);
                     try {
-                        $formula_id = handleFormula($pdo, $expr, $object_id);
+                        $formula_id = handleFormula($pdo, $expr, $object_id, $input['name']);
                         error_log("[PROPERTY PUT] formula stored/linked id=$formula_id expr='$expr'");
                     } catch (Exception $fe) {
                         error_log("[PROPERTY PUT] ERROR inserting formula expr='$expr' msg=" . $fe->getMessage());
@@ -596,13 +681,18 @@ switch ($entity) {
                         echo json_encode(["message" => "Failed to update property: formula error"]);
                         break;
                     }
-                    $calc = evaluateFormula($pdo, $expr, $object_id);
-                    if ($calc !== null) {
-                        $computed_waarde = (string)$calc;
-                        error_log("[PROPERTY PUT] evaluation success result='$computed_waarde'");
+                    if ($raw_formula !== '' && $incoming_waarde !== '' && is_numeric($incoming_waarde)) {
+                        $computed_waarde = $incoming_waarde; // client preview numeric
+                        error_log("[PROPERTY PUT] using client preview value='$computed_waarde'");
                     } else {
-                        $computed_waarde = '';
-                        error_log("[PROPERTY PUT] evaluation failed; storing empty waarde");
+                        $calc = evaluateFormula($pdo, $expr, $object_id);
+                        if ($calc !== null) {
+                            $computed_waarde = (string)$calc;
+                            error_log("[PROPERTY PUT] evaluation success result='$computed_waarde'");
+                        } else {
+                            $computed_waarde = '';
+                            error_log("[PROPERTY PUT] evaluation failed; storing empty waarde");
+                        }
                     }
                 } else {
                     error_log("[PROPERTY PUT] not a formula candidate – storing raw value");
@@ -662,6 +752,82 @@ switch ($entity) {
                     echo json_encode($formulas);
                 }
                 break;
+
+    case 'maintenance':
+        // Utility endpoints for admin / corrective actions
+        if ($action === 'recalculate_formulas') {
+            $objectFilter = isset($_GET['object_id']) ? $_GET['object_id'] : null;
+            $dryRun = isset($_GET['dry_run']) && $_GET['dry_run'] == '1';
+            $params = [];
+            $where = '';
+            if ($objectFilter) {
+                $where = 'WHERE e.object_id = ?';
+                $params[] = $objectFilter;
+            }
+            $sql = "SELECT e.id, e.object_id, e.name, e.waarde, e.formula_id, f.formula as formula_expression
+                    FROM eigenschappen e
+                    JOIN formulas f ON e.formula_id = f.id
+                    $where";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            $rows = $stmt->fetchAll();
+            $processed = 0; $updated = 0; $skipped = 0; $errors = 0;
+            foreach ($rows as $row) {
+                $processed++;
+                $calc = evaluateFormula($pdo, $row['formula_expression'], $row['object_id']);
+                if ($calc === null) {
+                    $skipped++;
+                    continue;
+                }
+                // Only update if different (string compare after cast)
+                if ((string)$calc !== (string)$row['waarde']) {
+                    if (!$dryRun) {
+                        $u = $pdo->prepare("UPDATE eigenschappen SET waarde = ?, updated_at = NOW() WHERE id = ?");
+                        try {
+                            $u->execute([(string)$calc, $row['id']]);
+                            $updated++;
+                        } catch (Exception $ue) {
+                            $errors++;
+                            debug_log('[MAINT] update failed id=' . $row['id'] . ' msg=' . $ue->getMessage());
+                        }
+                    } else {
+                        $updated++; // count potential updates in dry-run
+                    }
+                } else {
+                    $skipped++;
+                }
+            }
+            http_response_code(200);
+            echo json_encode([
+                'message' => 'Recalculation complete',
+                'processed' => $processed,
+                'updated' => $updated,
+                'skipped' => $skipped,
+                'errors' => $errors,
+                'dry_run' => $dryRun,
+                'object_scope' => $objectFilter ? 'single' : 'all'
+            ]);
+        } elseif ($action === 'evaluate_expression') {
+            // Evaluate an arbitrary expression in the context of an object (for debugging)
+            $objectId = isset($_GET['object_id']) ? (int)$_GET['object_id'] : 0;
+            $expr = isset($_GET['expr']) ? $_GET['expr'] : '';
+            if (!$objectId || $expr === '') {
+                http_response_code(400);
+                echo json_encode(['message' => 'Missing object_id or expr']);
+                break;
+            }
+            $result = evaluateFormula($pdo, $expr, $objectId);
+            http_response_code(200);
+            echo json_encode([
+                'expression' => $expr,
+                'result' => $result,
+                'object_id' => $objectId
+            ]);
+        } else {
+            http_response_code(400);
+            echo json_encode(['message' => 'Unknown maintenance action']);
+        }
+        break;
 
             case 'POST':
                 error_log("Formula POST - name: " . ($input['name'] ?? 'missing') . ", formula: " . ($input['formula'] ?? 'missing'));

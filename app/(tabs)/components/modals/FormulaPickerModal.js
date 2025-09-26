@@ -22,7 +22,7 @@ const FormulaPickerModal = ({ visible, onClose, formulas = [], onSelectFormula }
                         </TouchableOpacity>
                     </View>
 
-                    <ScrollView style={AppStyles.modalContent}>
+                    <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={{ paddingBottom: 12 }}>
                         {formulasList.length === 0 ? (
                             <View style={{ padding: 20, alignItems: 'center' }}>
                                 <Calculator size={48} color={colors.lightGray400} />
@@ -73,15 +73,12 @@ const FormulaPickerModal = ({ visible, onClose, formulas = [], onSelectFormula }
                             </View>
                         )}
                     </ScrollView>
-
-                    <View style={AppStyles.modalFooter}>
-                        <TouchableOpacity
-                            style={[AppStyles.btnSecondary, { flex: 1 }]}
-                            onPress={onClose}
-                        >
-                            <Text style={AppStyles.btnSecondaryText}>Sluiten</Text>
-                        </TouchableOpacity>
-                    </View>
+                    <TouchableOpacity
+                        style={[AppStyles.btnSecondary, { marginTop: 8 }]}
+                        onPress={onClose}
+                    >
+                        <Text style={AppStyles.btnSecondaryText}>Sluiten</Text>
+                    </TouchableOpacity>
                 </View>
             </View>
         </Modal>

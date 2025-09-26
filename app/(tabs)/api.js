@@ -152,9 +152,14 @@ export const addProperties = async (objectId, properties) => {
             const formData = new FormData();
             formData.append('object_id', objectId);
             formData.append('name', prop.name.trim());
-            formData.append('waarde', (prop.value ?? '').toString().trim());
+
+            // The `waarde` and `raw_formula` are now correctly pre-calculated 
+            // in AddPropertyScreen.js. We just need to send them.
+            formData.append('waarde', prop.waarde);
+            formData.append('raw_formula', prop.raw_formula || '');
+            
             formData.append('formula_id', prop.formula_id || '');
-            formData.append('eenheid', prop.unit ? prop.unit : '');
+            formData.append('eenheid', prop.unit || '');
 
             if (prop.files && prop.files.length > 0) {
                 for (const file of prop.files) {
@@ -181,12 +186,18 @@ export const addProperties = async (objectId, properties) => {
     }
 };
 
-export const updateProperty = async (propertyId, { name, waarde, formula_id, eenheid }) => {
+export const updateProperty = async (propertyId, { name, waarde, raw_formula, formula_id, eenheid }) => {
     try {
         const response = await fetch(`${CONFIG.API_BASE_URL}?entity=properties&id=${propertyId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, waarde, formula_id: formula_id || '', eenheid: eenheid || '' }),
+            body: JSON.stringify({ 
+                name, 
+                waarde, 
+                raw_formula: raw_formula || '',
+                formula_id: formula_id || '', 
+                eenheid: eenheid || '' 
+            }),
         });
         if (!response.ok) {
             const err = await response.json().catch(() => ({ message: 'Unknown error' }));
