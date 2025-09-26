@@ -147,47 +147,31 @@ export const handleAddObject = async (parentPath, newObjectData, userToken) => {
  */
 export const addProperties = async (objectId, properties) => {
     try {
-        // Use Promise.all to wait for all individual property requests to complete.
-        await Promise.all(properties.map(async (prop) => {
+        // Submit sequentially to ensure dependency order (formulas can reference earlier properties)
+        for (const prop of properties) {
             const formData = new FormData();
             formData.append('object_id', objectId);
             formData.append('name', prop.name.trim());
-            formData.append('waarde', prop.value.trim());
-            formData.append('formule', prop.formule ? prop.formule : '');
+            formData.append('waarde', (prop.value ?? '').toString().trim());
+            formData.append('formula_id', prop.formula_id || '');
             formData.append('eenheid', prop.unit ? prop.unit : '');
 
-            // Check if there's a files array and it's not empty.
             if (prop.files && prop.files.length > 0) {
-                // Loop through the files array for this property.
-                prop.files.forEach(file => {
-                    // Append each file using 'files[]' as the key.
-                    // This is crucial for the PHP backend to recognize it as an array.
+                for (const file of prop.files) {
                     if (Platform.OS === 'web') {
-                        // On web, we have the original File object stored in _webFile
                         formData.append('files[]', file._webFile, file.name);
                     } else {
-                        // On native, we use the { uri, type, name } structure
-                        formData.append('files[]', {
-                            uri: file.uri,
-                            type: file.mimeType,
-                            name: file.name,
-                        });
+                        formData.append('files[]', { uri: file.uri, type: file.mimeType, name: file.name });
                     }
-                });
+                }
             }
 
-            // Send one request per property.
-            const response = await fetch(`${CONFIG.API_BASE_URL}?entity=properties`, {
-                method: 'POST',
-                body: formData, // FormData automatically sets the correct headers
-            });
-
+            const response = await fetch(`${CONFIG.API_BASE_URL}?entity=properties`, { method: 'POST', body: formData });
             if (!response.ok) {
-                const errorResult = await response.json();
+                const errorResult = await response.json().catch(() => ({}));
                 throw new Error(`Failed to save property '${prop.name}': ${errorResult.message || 'Unknown error'}`);
             }
-        }));
-
+        }
         Alert.alert('Success', 'Properties added successfully!');
         return true;
     } catch (error) {
@@ -197,12 +181,12 @@ export const addProperties = async (objectId, properties) => {
     }
 };
 
-export const updateProperty = async (propertyId, { name, waarde, formule, eenheid }) => {
+export const updateProperty = async (propertyId, { name, waarde, formula_id, eenheid }) => {
     try {
         const response = await fetch(`${CONFIG.API_BASE_URL}?entity=properties&id=${propertyId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, waarde, formule: formule || '', eenheid: eenheid || '' }),
+            body: JSON.stringify({ name, waarde, formula_id: formula_id || '', eenheid: eenheid || '' }),
         });
         if (!response.ok) {
             const err = await response.json().catch(() => ({ message: 'Unknown error' }));
@@ -232,6 +216,58 @@ export const deleteProperty = async (propertyId) => {
         console.error('Error deleting property:', error);
         Alert.alert('Error', error.message);
         return false;
+    }
+};
+
+// --- Formulas API Functions ---
+export const fetchFormulas = async () => {
+    try {
+        const response = await fetch(`${CONFIG.API_BASE_URL}?entity=formulas`);
+        if (!response.ok) throw new Error('Failed to fetch formulas');
+        return await response.json();
+    } catch (error) {
+        console.error('Failed to fetch formulas:', error);
+        return [];
+    }
+};
+
+export const createFormula = async (name, formula) => {
+    try {
+        const response = await fetch(`${CONFIG.API_BASE_URL}?entity=formulas`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, formula }),
+        });
+        return await response.json();
+    } catch (error) {
+        console.error('Error creating formula:', error);
+        return { success: false, message: 'Failed to create formula' };
+    }
+};
+
+export const updateFormula = async (id, name, formula) => {
+    try {
+        const response = await fetch(`${CONFIG.API_BASE_URL}?entity=formulas&id=${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, formula }),
+        });
+        return await response.json();
+    } catch (error) {
+        console.error('Error updating formula:', error);
+        return { success: false, message: 'Failed to update formula' };
+    }
+};
+
+export const deleteFormula = async (id) => {
+    try {
+        const response = await fetch(`${CONFIG.API_BASE_URL}?entity=formulas&id=${id}`, {
+            method: 'DELETE'
+        });
+        return await response.json();
+    } catch (error) {
+        console.error('Error deleting formula:', error);
+        return { success: false, message: 'Failed to delete formula' };
     }
 };
 

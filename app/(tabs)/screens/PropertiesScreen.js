@@ -117,9 +117,9 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
                                     </View>
                                     <View style={{ alignItems: 'flex-end' }}>
                                         {/* Show formula if present */}
-                                        {prop.formule && prop.formule.trim() !== '' && (
+                                        {prop.formula_expression && prop.formula_expression.trim() !== '' && (
                                             <Text style={{ color: colors.lightGray500, fontSize: 13, fontStyle: 'italic' }}>
-                                                Formule: {prop.formule}
+                                                Formule: {prop.formula_expression}
                                             </Text>
                                         )}
                                         <Text style={AppStyles.propertyValue}>

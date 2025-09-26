@@ -1,11 +1,13 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
-import { ChevronLeft, FileText, Paperclip, Plus, Tag, X } from 'lucide-react-native';
+import { Calculator, ChevronLeft, FileText, Paperclip, Plus, Tag, X } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, ScrollView, StatusBar, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import AppStyles, { colors } from '../AppStyles';
+import AddFormulaModal from '../components/modals/AddFormulaModal';
 import AddTemplateModal from '../components/modals/AddTemplateModal';
 import EditPropertyModal from '../components/modals/EditPropertyModal';
+import FormulaPickerModal from '../components/modals/FormulaPickerModal';
 import TemplatePickerModal from '../components/modals/TemplatePickerModal';
 
 const buildPropertiesMap = (properties, outputUnit) => {
@@ -96,15 +98,7 @@ const convertToUnit = (value, fromUnit, toUnit) => {
     return value * unitConversionTable[toUnit][fromUnit];
 };
 
-const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, setCurrentScreen, onSave, onTemplateAdded, findItemByPath }) => {
-
-    const objectIdForProperties = currentPath[currentPath.length - 1];
-    const item = findItemByPath(objectsHierarchy, currentPath);
-
-    const webInputRef = useRef(null);
-
-    if (!item) return null;
-
+const AddPropertyScreen = ({ ...props }) => {
     const [newPropertiesList, setNewPropertiesList] = useState([]);
     const [nextNewPropertyId, setNextNewPropertyId] = useState(0);
     const [selectedTemplateForPropertyAdd, setSelectedTemplateForPropertyAdd] = useState(null);
@@ -119,6 +113,17 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
     const [editedName, setEditedName] = useState('');
     const [showEditModal, setShowEditModal] = useState(false);
     const [modalPropertyIndex, setModalPropertyIndex] = useState(null);
+    const [formulas, setFormulas] = useState([]);
+    const [selectedFormula, setSelectedFormula] = useState(null);
+    const [showAddFormulaModal, setShowAddFormulaModal] = useState(false);
+    const [showFormulaPickerModal, setShowFormulaPickerModal] = useState(false);
+
+    const webInputRef = useRef(null);
+
+    const objectIdForProperties = props.currentPath[props.currentPath.length - 1];
+    const item = props.findItemByPath(props.objectsHierarchy, props.currentPath);
+
+    if (!item) return null;
 
     const allUnits = ['m', 'cm', 'mm', 'kg', 'g', 'L', 'mL'];
 
@@ -130,13 +135,29 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
         return Math.round(value * factor) / factor;
     };
 
+    // Fetch formulas on component mount
+    useEffect(() => {
+        const loadFormulas = async () => {
+            try {
+                const formulasData = await fetchFormulas();
+                setFormulas(Array.isArray(formulasData) ? formulasData : []);
+            } catch (error) {
+                console.error('Error fetching formulas:', error);
+                setFormulas([]); // Ensure it's always an array
+            }
+        };
+        loadFormulas();
+    }, []);
+
     // Initialize or refresh the draft when item.properties changes
     useEffect(() => {
         const draft = (item.properties || []).map(p => ({
             id: p.id,
             name: p.name,
             waarde: p.waarde,
-            formule: p.formule || '',
+            formula_id: p.formula_id || null,
+            formula_name: p.formula_name || '',
+            formula_expression: p.formula_expression || '',
             eenheid: p.eenheid || ''
         }));
         setExistingPropertiesDraft(draft);
@@ -149,11 +170,26 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                 name: '',
                 value: '',
                 unit: '', 
+                formula_id: null,
                 files: []
             };
             setNextNewPropertyId(prevId => prevId + 1);
             return [...prevList, newField];
         });
+    };
+
+    const handleFormulaSaved = (newFormula) => {
+        setFormulas(prev => [...prev, newFormula]);
+    };
+
+    const handleFormulaSelected = (formula) => {
+        // For now, we'll just alert with the formula details
+        // In a real implementation, you might want to add it to a specific property
+        Alert.alert(
+            'Formule geselecteerd',
+            `Naam: ${formula.name}\nFormule: ${formula.formula}\n\nJe kunt deze formule gebruiken door '${formula.formula}' te typen in het waarde veld.`,
+            [{ text: 'OK' }]
+        );
     };
 
     const addFileToProperty = (propertyId, fileObject) => {
@@ -264,45 +300,24 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
     };
 
     const handleSaveOnBack = async () => {
-        let propertiesMap = buildPropertiesMap(newPropertiesList);
+        // IMPORTANT: Do NOT pre-evaluate formulas here. We want to send the raw
+        // user-entered expression (e.g. "lengte*breedte") to the backend so the
+        // PHP API can (a) detect it's a formula, (b) store the expression in the
+        // formulas table, (c) compute & store the numeric result in 'waarde'.
+        // If we pre-compute on the client, the backend only receives a number
+        // and will never create a formula record.
 
-        // auto-compute formulas
-        const updatedList = newPropertiesList.map(prop => {
-            if (prop.value && /[+\-*/]/.test(prop.value)) {
-                const outputUnit = prop.unit;
-                const propertiesMap = buildPropertiesMap(newPropertiesList, outputUnit);
-                const { value: result, error } = evaluateFormula(prop.value, propertiesMap);
-                let finalValue;
-                if (error) {
-                    finalValue = 'Error';
-                } else {
-                    finalValue = result;
-                    if (outputUnit && result !== null) {
-                        finalValue = convertToUnit(result, outputUnit, outputUnit);
-                    }
-                }
-                return { 
-                    ...prop, 
-                    formule: prop.value,
-                    value: String(finalValue)
-                };
-            }
-            return { ...prop, formule: '', value: prop.value };
-        });
-
-        const validPropertiesToSave = updatedList.filter(prop =>
-            prop.name.trim() !== ''
-        );
+        const validPropertiesToSave = newPropertiesList.filter(prop => prop.name.trim() !== '');
 
         if (validPropertiesToSave.length === 0) {
-            setCurrentScreen('properties');
+            props.setCurrentScreen('properties');
             return;
         }
 
-        const success = await onSave(objectIdForProperties, validPropertiesToSave);
+        const success = await props.onSave(objectIdForProperties, validPropertiesToSave);
 
         if (success) {
-            setCurrentScreen('properties');
+            props.setCurrentScreen('properties');
         }
     };
 
@@ -360,6 +375,21 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
         return buildPropertiesMap(props, outputUnit);
     };
 
+    // Fetch formulas on component mount
+    useEffect(() => {
+        fetchFormulas();
+    }, []);
+
+    const fetchFormulas = async () => {
+        try {
+            const response = await fetch('/api/formulas');
+            const data = await response.json();
+            setFormulas(data);
+        } catch (error) {
+            console.error('Error fetching formulas:', error);
+        }
+    };
+
     return (
         <View style={[AppStyles.screen, { backgroundColor: colors.white, flex: 1 }]}>
             {Platform.OS === 'web' && (
@@ -376,10 +406,10 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
             {showTemplatePickerModal && <TemplatePickerModal
                 visible={showTemplatePickerModal}
                 onClose={() => setShowTemplatePickerModal(false)}
-                templates={fetchedTemplates}
+                templates={props.fetchedTemplates}
                 onSelect={(templateId) => {
-                    if (templateId && fetchedTemplates[templateId]) {
-                        const templateProps = fetchedTemplates[templateId].properties.map((prop, index) => ({
+                    if (templateId && props.fetchedTemplates[templateId]) {
+                        const templateProps = props.fetchedTemplates[templateId].properties.map((prop, index) => ({
                             id: index,
                             name: prop.name,
                             value: prop.value || '',
@@ -403,7 +433,7 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
             {showAddTemplateModal && <AddTemplateModal
                 visible={showAddTemplateModal}
                 onClose={() => setShowAddTemplateModal(false)}
-                onTemplateSaved={onTemplateAdded}
+                onTemplateSaved={props.onTemplateAdded}
             />}
 
             <KeyboardAvoidingView
@@ -412,7 +442,7 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
             >
                 <View style={AppStyles.header}>
                     <View style={AppStyles.headerFlex}>
-                        <TouchableOpacity onPress={() => setCurrentScreen('properties')} style={AppStyles.headerBackButton}>
+                        <TouchableOpacity onPress={() => props.setCurrentScreen('properties')} style={AppStyles.headerBackButton}>
                             <ChevronLeft color={colors.lightGray700} size={24} />
                         </TouchableOpacity>
                         <Text style={AppStyles.headerTitleLg}>Eigenschap Toevoegen</Text>
@@ -453,15 +483,15 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                             {/* Right Side */}
                                             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                                                 <View style={{ alignItems: 'flex-end' }}>
-                                                {prop.formule && prop.formule.trim() !== '' && (
+                                                {prop.formula_expression && prop.formula_expression.trim() !== '' && (
                                                     <Text
-                                                    style={{
-                                                        color: colors.lightGray500,
-                                                        fontSize: 13,
-                                                        fontStyle: 'italic',
-                                                    }}
+                                                        style={{
+                                                            color: colors.lightGray500,
+                                                            fontSize: 13,
+                                                            fontStyle: 'italic',
+                                                        }}
                                                     >
-                                                    Formule: {prop.formule}
+                                                        Formule: {prop.formula_expression}
                                                     </Text>
                                                 )}
                                                 <Text style={[AppStyles.propertyValue, { marginTop: 4 }]}>
@@ -551,7 +581,9 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                                         if (newVal) {
                                             prop.name = newVal.name;
                                             prop.waarde = newVal.waarde;
-                                            prop.formule = newVal.formule;
+                                            prop.formula_id = newVal.formula_id;
+                                            prop.formula_name = newVal.formula_name;
+                                            prop.formula_expression = newVal.formula_expression;
                                             prop.eenheid = newVal.eenheid;
                                         }
                                     });
@@ -572,7 +604,7 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                             <Text style={AppStyles.formLabel}>Kies een sjabloon (optioneel)</Text>
                             <TouchableOpacity onPress={() => setShowTemplatePickerModal(true)} style={[AppStyles.formInput, { justifyContent: 'center' }]}>
                                 <Text style={{ color: selectedTemplateForPropertyAdd ? colors.lightGray800 : colors.lightGray400 }}>
-                                    {selectedTemplateForPropertyAdd ? fetchedTemplates[selectedTemplateForPropertyAdd]?.name : 'Kies een sjabloon...'}
+                                    {selectedTemplateForPropertyAdd ? props.fetchedTemplates[selectedTemplateForPropertyAdd]?.name : 'Kies een sjabloon...'}
                                 </Text>
                             </TouchableOpacity>
                         </View>
@@ -761,10 +793,33 @@ const AddPropertyScreen = ({ currentPath, objectsHierarchy, fetchedTemplates, se
                         </TouchableOpacity>
                     </View>
                 </ScrollView>
+                
+                {/* Formula Picker FAB */}
+                <TouchableOpacity 
+                    onPress={() => setShowFormulaPickerModal(true)} 
+                    style={[AppStyles.filterFab, { bottom: 150 }]} // Position above the main FAB
+                >
+                    <Calculator color={colors.blue600} size={24} />
+                </TouchableOpacity>
+                
+                {/* Add Property FAB */}
                 <TouchableOpacity onPress={addNewPropertyField} style={AppStyles.fab}>
                     <Plus color="white" size={24} />
                 </TouchableOpacity>
             </KeyboardAvoidingView>
+
+            {/* Modals */}
+            <AddFormulaModal
+                visible={showAddFormulaModal}
+                onClose={() => setShowAddFormulaModal(false)}
+                onSave={handleFormulaSaved}
+            />
+            <FormulaPickerModal
+                visible={showFormulaPickerModal}
+                onClose={() => setShowFormulaPickerModal(false)}
+                formulas={formulas}
+                onSelectFormula={handleFormulaSelected}
+            />
         </View>
     );
 };

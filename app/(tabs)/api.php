@@ -82,6 +82,75 @@ function getPropertyFiles($pdo, $property_id) {
     return $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
+// --- HELPER FUNCTION to detect if a value is a formula ---
+function isFormula($value) {
+    // Legacy: required both operators and letters
+    return preg_match('/[+\-*\/]/', $value) && preg_match('/[a-zA-Z]/', $value);
+}
+
+// NEW: Broader detection – treat any string containing an operator as a formula candidate
+function isFormulaCandidate($value) {
+    return preg_match('/[+\-*\/]/', $value); // at least one math operator
+}
+
+// --- HELPER FUNCTION to create or find existing formula ---
+function handleFormula($pdo, $formulaExpression, $objectId) {
+    $formulaExpression = trim($formulaExpression);
+    
+    // First, check if this exact formula already exists
+    $stmt = $pdo->prepare("SELECT id FROM formulas WHERE formula = ?");
+    $stmt->execute([$formulaExpression]);
+    $existingFormula = $stmt->fetch();
+    
+    if ($existingFormula) {
+        return $existingFormula['id'];
+    }
+    
+    // If not found, create a new formula with auto-generated name
+    $formulaName = "Auto_" . substr(md5($formulaExpression . time()), 0, 8);
+    
+    $stmt = $pdo->prepare("INSERT INTO formulas (name, formula, created_at, updated_at) VALUES (?, ?, NOW(), NOW())");
+    $stmt->execute([$formulaName, $formulaExpression]);
+    
+    return $pdo->lastInsertId();
+}
+
+// --- HELPER FUNCTION to evaluate formula ---
+function evaluateFormula($pdo, $formulaExpression, $objectId) {
+    // Get all properties for this object to use in formula calculation
+    $stmt = $pdo->prepare("SELECT name, waarde FROM eigenschappen WHERE object_id = ?");
+    $stmt->execute([$objectId]);
+    $properties = $stmt->fetchAll();
+    
+    $expression = $formulaExpression;
+    
+    // Replace property names with their values in the formula
+    foreach ($properties as $prop) {
+        if (!empty($prop['name']) && is_numeric($prop['waarde'])) {
+            $expression = preg_replace('/\b' . preg_quote($prop['name'], '/') . '\b/i', $prop['waarde'], $expression);
+        }
+    }
+    
+    // Check if there are still letters in the expression (unknown variables)
+    if (preg_match('/[a-zA-Z]/', $expression)) {
+        return null; // Cannot calculate due to unknown variables
+    }
+    
+    // Safely evaluate the mathematical expression
+    try {
+        // Only allow numbers, operators, parentheses, and whitespace
+        if (preg_match('/^[0-9+\-*\/().\s]+$/', $expression)) {
+            $result = eval("return $expression;");
+            return is_numeric($result) ? $result : null;
+        }
+    } catch (Exception $e) {
+        // Calculation failed
+        return null;
+    }
+    
+    return null;
+}
+
 
 // Function to fetch an object and its children/properties recursively
 function fetchItemWithHierarchy($pdo, $id) {
@@ -97,7 +166,7 @@ function fetchItemWithHierarchy($pdo, $id) {
     }
 
     // Fetch properties for the current object (using 'eigenschappen' table)
-    $stmt_prop = $pdo->prepare("SELECT id, object_id, name, waarde, formule, eenheid, created_at, updated_at FROM eigenschappen WHERE object_id = ? ORDER BY created_at ASC, id ASC");
+    $stmt_prop = $pdo->prepare("SELECT e.id, e.object_id, e.name, e.waarde, e.eenheid, e.formula_id, e.created_at, e.updated_at, f.name as formula_name, f.formula as formula_expression FROM eigenschappen e LEFT JOIN formulas f ON e.formula_id = f.id WHERE e.object_id = ? ORDER BY e.created_at ASC, e.id ASC");
     $stmt_prop->execute([$item['id']]);
     $properties = $stmt_prop->fetchAll();
 
@@ -277,7 +346,7 @@ switch ($entity) {
 
                     // For each object, fetch its properties and immediate children count
                     foreach ($objects as &$object) {
-                        $stmt_prop = $pdo->prepare("SELECT id, object_id, name, waarde, created_at, updated_at FROM eigenschappen WHERE object_id = ?");
+                        $stmt_prop = $pdo->prepare("SELECT e.id, e.object_id, e.name, e.waarde, e.eenheid, e.formula_id, e.created_at, e.updated_at, f.name as formula_name, f.formula as formula_expression FROM eigenschappen e LEFT JOIN formulas f ON e.formula_id = f.id WHERE e.object_id = ?");
                         $stmt_prop->execute([$object['id']]);
                         $object['properties'] = $stmt_prop->fetchAll();
 
@@ -363,7 +432,7 @@ switch ($entity) {
                     echo json_encode(["message" => "Missing 'object_id' for properties query."]);
                     break;
                 }
-                $stmt = $pdo->prepare("SELECT id, object_id, name, waarde, formule, eenheid, created_at, updated_at FROM eigenschappen WHERE object_id = ? ORDER BY created_at ASC, id ASC");
+                $stmt = $pdo->prepare("SELECT e.id, e.object_id, e.name, e.waarde, e.eenheid, e.formula_id, e.created_at, e.updated_at, f.name as formula_name, f.formula as formula_expression FROM eigenschappen e LEFT JOIN formulas f ON e.formula_id = f.id WHERE e.object_id = ? ORDER BY e.created_at ASC, e.id ASC");
                 $stmt->execute([$object_id]);
                 $properties = $stmt->fetchAll();
                 http_response_code(200);
@@ -381,15 +450,55 @@ switch ($entity) {
                 $object_id = $_POST['object_id'];
                 $name = $_POST['name'];
                 $waarde = $_POST['waarde'] ?? '';
-                $formule = $_POST['formule'] ?? '';
+                $formula_id = $_POST['formula_id'] ?? null;
+                // Convert empty string to null for foreign key constraint
+                if ($formula_id === '' || $formula_id === 'null') {
+                    $formula_id = null;
+                }
                 $eenheid = $_POST['eenheid'] ?? '';
+
+                $original_input_waarde = $waarde; // keep original user input
 
                 $pdo->beginTransaction();
                 try {
+                    error_log("[PROPERTY POST] name='$name' raw_waarde='$original_input_waarde'");
+                    $hasOperators = preg_match('/[+\-*\/]/', $original_input_waarde);
+                    $hasLetters = preg_match('/[a-zA-Z]/', $original_input_waarde);
+                    error_log("[PROPERTY POST] detect operators=" . ($hasOperators?1:0) . " letters=" . ($hasLetters?1:0));
+
+                    // Use broader candidate detection so even pure numeric expressions like 2*3 are treated as formulas
+                    if ($original_input_waarde !== '' && isFormulaCandidate($original_input_waarde)) {
+                        $expr = trim($original_input_waarde);
+                        try {
+                            $formula_id = handleFormula($pdo, $expr, $object_id);
+                            error_log("[PROPERTY POST] formula stored/linked id=$formula_id expr='$expr'");
+                        } catch (Exception $fe) {
+                            error_log("[PROPERTY POST] ERROR inserting formula expr='$expr' msg=" . $fe->getMessage());
+                            throw $fe; // abort transaction
+                        }
+
+                        // Evaluate AFTER storing (so re-use expression). Evaluation uses existing properties only.
+                        $calculatedValue = evaluateFormula($pdo, $expr, $object_id);
+                        if ($calculatedValue !== null) {
+                            $waarde = (string)$calculatedValue; // success numeric result
+                            error_log("[PROPERTY POST] evaluation success result='$waarde'");
+                        } else {
+                            // Do NOT leave expression in waarde – store empty (user requirement)
+                            $waarde = '';
+                            error_log("[PROPERTY POST] evaluation failed; storing empty waarde and keeping expr in formulas table");
+                        }
+                    } else {
+                        error_log("[PROPERTY POST] not a formula candidate – storing raw value");
+                        // Non-formula: keep original scalar value (string/number)
+                        $waarde = $original_input_waarde;
+                    }
+
                     // Insert the property text data
-                    $stmt = $pdo->prepare("INSERT INTO eigenschappen (object_id, name, waarde, formule, eenheid, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())");
-                    $stmt->execute([$object_id, $name, $waarde, $formule, $eenheid]);
+                    $stmt = $pdo->prepare("INSERT INTO eigenschappen (object_id, name, waarde, formula_id, eenheid, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())");
+                    error_log("[PROPERTY POST] about to INSERT property object_id=$object_id name='$name' waarde='$waarde' formula_id=" . ($formula_id??'NULL') . " eenheid='$eenheid'");
+                    $stmt->execute([$object_id, $name, $waarde, $formula_id, $eenheid]);
                     $new_property_id = $pdo->lastInsertId();
+                    error_log("[PROPERTY POST] property inserted id=$new_property_id");
 
                     $uploadDir = 'uploads/';
 
@@ -452,9 +561,55 @@ switch ($entity) {
                     echo json_encode(["message" => "Missing 'name' or 'waarde' for property update."]);
                     break;
                 }
-                $formule = $input['formule'] ?? '';
-                $stmt = $pdo->prepare("UPDATE eigenschappen SET name = ?, waarde = ?, formule = ?, updated_at = NOW() WHERE id = ?");
-                $stmt->execute([$input['name'], $input['waarde'], $formule, $id]);
+                
+                $incoming_waarde = $input['waarde'];
+                $formula_id = $input['formula_id'] ?? null;
+                // Convert empty string to null for foreign key constraint
+                if ($formula_id === '' || $formula_id === 'null') {
+                    $formula_id = null;
+                }
+                $eenheid = $input['eenheid'] ?? '';
+                
+                // Get the object_id for this property to use in formula evaluation
+                $stmt = $pdo->prepare("SELECT object_id FROM eigenschappen WHERE id = ?");
+                $stmt->execute([$id]);
+                $property = $stmt->fetch();
+                
+                if (!$property) {
+                    http_response_code(404);
+                    echo json_encode(["message" => "Property not found."]);
+                    break;
+                }
+                
+                $object_id = $property['object_id'];
+                
+                error_log("[PROPERTY PUT] id=$id raw_waarde='$incoming_waarde'");
+                $computed_waarde = $incoming_waarde;
+                if ($incoming_waarde !== '' && isFormulaCandidate($incoming_waarde)) {
+                    $expr = trim($incoming_waarde);
+                    try {
+                        $formula_id = handleFormula($pdo, $expr, $object_id);
+                        error_log("[PROPERTY PUT] formula stored/linked id=$formula_id expr='$expr'");
+                    } catch (Exception $fe) {
+                        error_log("[PROPERTY PUT] ERROR inserting formula expr='$expr' msg=" . $fe->getMessage());
+                        http_response_code(500);
+                        echo json_encode(["message" => "Failed to update property: formula error"]);
+                        break;
+                    }
+                    $calc = evaluateFormula($pdo, $expr, $object_id);
+                    if ($calc !== null) {
+                        $computed_waarde = (string)$calc;
+                        error_log("[PROPERTY PUT] evaluation success result='$computed_waarde'");
+                    } else {
+                        $computed_waarde = '';
+                        error_log("[PROPERTY PUT] evaluation failed; storing empty waarde");
+                    }
+                } else {
+                    error_log("[PROPERTY PUT] not a formula candidate – storing raw value");
+                }
+
+                $stmt = $pdo->prepare("UPDATE eigenschappen SET name = ?, waarde = ?, formula_id = ?, eenheid = ?, updated_at = NOW() WHERE id = ?");
+                $stmt->execute([$input['name'], $computed_waarde, $formula_id, $eenheid, $id]);
                 http_response_code(200);
                 echo json_encode(["message" => "Property updated successfully."]);
                 break;
@@ -478,6 +633,99 @@ switch ($entity) {
             default:
                 http_response_code(405); // Method Not Allowed
                 echo json_encode(["message" => "Method not allowed for properties entity."]);
+                break;
+        }
+        break;
+
+    case 'formulas':
+        switch ($method) {
+            case 'GET':
+                if ($id) {
+                    // Fetch a single formula
+                    $stmt = $pdo->prepare("SELECT id, name, formula, created_at, updated_at FROM formulas WHERE id = ?");
+                    $stmt->execute([$id]);
+                    $formula = $stmt->fetch();
+                    
+                    if ($formula) {
+                        http_response_code(200);
+                        echo json_encode($formula);
+                    } else {
+                        http_response_code(404);
+                        echo json_encode(["message" => "Formula not found."]);
+                    }
+                } else {
+                    // Fetch all formulas
+                    $stmt = $pdo->prepare("SELECT id, name, formula, created_at, updated_at FROM formulas ORDER BY name ASC");
+                    $stmt->execute();
+                    $formulas = $stmt->fetchAll();
+                    http_response_code(200);
+                    echo json_encode($formulas);
+                }
+                break;
+
+            case 'POST':
+                error_log("Formula POST - name: " . ($input['name'] ?? 'missing') . ", formula: " . ($input['formula'] ?? 'missing'));
+                if (!isset($input['name']) || !isset($input['formula'])) {
+                    http_response_code(400);
+                    echo json_encode(["message" => "Missing 'name' or 'formula' for new formula."]);
+                    break;
+                }
+                
+                error_log("Creating formula: " . $input['name'] . " = " . $input['formula']);
+                $stmt = $pdo->prepare("INSERT INTO formulas (name, formula, created_at, updated_at) VALUES (?, ?, NOW(), NOW())");
+                if ($stmt->execute([$input['name'], $input['formula']])) {
+                    $new_id = $pdo->lastInsertId();
+                    error_log("Formula created with ID: " . $new_id);
+                    http_response_code(201);
+                    echo json_encode(["message" => "Formula created successfully.", "id" => $new_id]);
+                } else {
+                    http_response_code(500);
+                    echo json_encode(["message" => "Failed to create formula."]);
+                }
+                break;
+
+            case 'PUT':
+                if (!$id) {
+                    http_response_code(400);
+                    echo json_encode(["message" => "Missing 'id' for formula update."]);
+                    break;
+                }
+                if (!isset($input['name']) || !isset($input['formula'])) {
+                    http_response_code(400);
+                    echo json_encode(["message" => "Missing 'name' or 'formula' for formula update."]);
+                    break;
+                }
+                
+                $stmt = $pdo->prepare("UPDATE formulas SET name = ?, formula = ?, updated_at = NOW() WHERE id = ?");
+                if ($stmt->execute([$input['name'], $input['formula'], $id])) {
+                    http_response_code(200);
+                    echo json_encode(["message" => "Formula updated successfully."]);
+                } else {
+                    http_response_code(500);
+                    echo json_encode(["message" => "Failed to update formula."]);
+                }
+                break;
+
+            case 'DELETE':
+                if (!$id) {
+                    http_response_code(400);
+                    echo json_encode(["message" => "Missing 'id' for formula deletion."]);
+                    break;
+                }
+                
+                $stmt = $pdo->prepare("DELETE FROM formulas WHERE id = ?");
+                if ($stmt->execute([$id])) {
+                    http_response_code(200);
+                    echo json_encode(["message" => "Formula deleted successfully."]);
+                } else {
+                    http_response_code(500);
+                    echo json_encode(["message" => "Failed to delete formula."]);
+                }
+                break;
+
+            default:
+                http_response_code(405);
+                echo json_encode(["message" => "Method not allowed for formulas entity."]);
                 break;
         }
         break;
@@ -643,7 +891,7 @@ switch ($entity) {
 
     default:
         http_response_code(400); // Bad Request
-        echo json_encode(["message" => "Invalid entity specified. Use 'objects', 'properties', 'templates', or 'users'."]);
+        echo json_encode(["message" => "Invalid entity specified. Use 'objects', 'properties', 'templates', 'formulas', or 'users'."]);
         break;
 }
 
