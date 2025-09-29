@@ -113,32 +113,9 @@ function handleFormula($pdo, $formulaExpression, $objectId, $propertyName = null
         return $existingFormula['id'];
     }
     
-    // Build a more descriptive auto name: "PropertyName (ObjectName)"
-    // Fallback gracefully if pieces missing.
-    $objectName = null;
-    try {
-        $stmtObj = $pdo->prepare("SELECT naam FROM objects WHERE id = ? LIMIT 1");
-        $stmtObj->execute([$objectId]);
-        $rowObj = $stmtObj->fetch();
-        if ($rowObj && !empty($rowObj['naam'])) {
-            $objectName = $rowObj['naam'];
-        }
-    } catch (Exception $e) {
-        // ignore, will fallback
-    }
-
+    // Auto name now only uses the property (eigenschap) name, not the object name.
     $cleanProp = $propertyName ? trim($propertyName) : null;
-    $cleanObj  = $objectName ? trim($objectName) : null;
-
-    if ($cleanProp && $cleanObj) {
-        $base = $cleanProp . ' (' . $cleanObj . ')';
-    } elseif ($cleanProp) {
-        $base = $cleanProp;
-    } elseif ($cleanObj) {
-        $base = $cleanObj;
-    } else {
-        $base = 'Formule';
-    }
+    $base = $cleanProp ?: 'Formule';
 
     // Ensure uniqueness by checking existing names and adding numeric suffix if needed
     $formulaName = $base;

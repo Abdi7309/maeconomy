@@ -126,6 +126,8 @@ const AddPropertyScreen = ({ ...props }) => {
     const [selectedFormula, setSelectedFormula] = useState(null);
     const [showAddFormulaModal, setShowAddFormulaModal] = useState(false);
     const [showFormulaPickerModal, setShowFormulaPickerModal] = useState(false);
+    // Track which waarde input was last focused so we can insert a picked formula
+    const [lastFocusedValuePropertyId, setLastFocusedValuePropertyId] = useState(null);
 
     const webInputRef = useRef(null);
 
@@ -204,13 +206,21 @@ const AddPropertyScreen = ({ ...props }) => {
     };
 
     const handleFormulaSelected = (formula) => {
-        // For now, we'll just alert with the formula details
-        // In a real implementation, you might want to add it to a specific property
-        Alert.alert(
-            'Formule geselecteerd',
-            `Naam: ${formula.name}\nFormule: ${formula.formula}\n\nJe kunt deze formule gebruiken door '${formula.formula}' te typen in het waarde veld.`,
-            [{ text: 'OK' }]
-        );
+        // Always create a NEW property row for the selected formula instead of replacing an existing one
+        setNewPropertiesList(prevList => [
+            ...prevList,
+            {
+                id: nextNewPropertyId,
+                name: formula.name,
+                value: formula.formula,
+                unit: '',
+                formula_id: formula.id,
+                files: []
+            }
+        ]);
+        setNextNewPropertyId(prev => prev + 1);
+        // Optionally we could set focus tracking to this new one (not strictly needed for now)
+        setLastFocusedValuePropertyId(nextNewPropertyId);
     };
 
     const addFileToProperty = (propertyId, fileObject) => {
@@ -570,7 +580,20 @@ const AddPropertyScreen = ({ ...props }) => {
                                 const originalDraft = [...existingPropertiesDraft]; // Capture state before changes
 
                                 if (updated && updated.__deleted) {
-                                    // ... (delete logic remains the same)
+                                    // Immediate UI removal of the deleted property
+                                    const deletedId = updated.id;
+                                    // Remove from existing draft list
+                                    const newDraft = originalDraft.filter(p => p.id !== deletedId);
+                                    setExistingPropertiesDraft(newDraft);
+                                    // Also remove from the live item.properties array clone (since item comes from hierarchy prop)
+                                    if (item && Array.isArray(item.properties)) {
+                                        item.properties = item.properties.filter(p => p.id !== deletedId);
+                                    }
+                                    // Close modal and clear selection
+                                    setShowEditModal(false);
+                                    setModalPropertyIndex(null);
+                                    // Feedback message
+                                    Alert.alert('Verwijderd', 'Eigenschap is succesvol verwijderd.');
                                     return;
                                 }
 
@@ -702,6 +725,7 @@ const AddPropertyScreen = ({ ...props }) => {
                                                 placeholder="Bijv. 2"
                                                 value={prop.value}
                                                 onChangeText={(text) => handlePropertyFieldChange(prop.id, 'value', text)}
+                                                onFocus={() => setLastFocusedValuePropertyId(prop.id)}
                                                 style={AppStyles.formInput}
                                             />
                                             {/* Show calculated result below the input */}
@@ -761,6 +785,7 @@ const AddPropertyScreen = ({ ...props }) => {
                                                 placeholder="Bijv. 2"
                                                 value={prop.value}
                                                 onChangeText={(text) => handlePropertyFieldChange(prop.id, 'value', text)}
+                                                onFocus={() => setLastFocusedValuePropertyId(prop.id)}
                                                 style={AppStyles.formInput}
                                             />
                                             {/* Show calculated result below the input */}
