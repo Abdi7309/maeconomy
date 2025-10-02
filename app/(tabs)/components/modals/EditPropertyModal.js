@@ -112,6 +112,7 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
     const [editedValue, setEditedValue] = useState(property?.waarde || '');
     const [editedFormula, setEditedFormula] = useState(initialFormula);
     const [editedUnit, setEditedUnit] = useState(property?.eenheid || '');
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
     useEffect(() => {
         if (visible) {
@@ -196,13 +197,33 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
         }
     };
 
-    const handleDelete = async () => {
+    const handleDelete = () => {
         if (!property?.id) { onClose(); return; }
-        const success = await deleteProperty(property.id);
-        if (success) {
-            onSaved({ __deleted: true, id: property.id });
-            onClose();
+        console.log('[EditPropertyModal] Delete button pressed for property:', property.name, 'ID:', property.id);
+        setShowDeleteConfirm(true);
+    };
+
+    const handleConfirmDelete = async () => {
+        console.log('[EditPropertyModal] User confirmed delete, starting delete for property ID:', property.id);
+        setShowDeleteConfirm(false);
+        
+        try {
+            const success = await deleteProperty(property.id);
+            console.log('[EditPropertyModal] Delete API response:', success);
+            
+            if (success) {
+                console.log('[EditPropertyModal] Success - calling onSaved callback');
+                onSaved({ __deleted: true, id: property.id });
+                onClose();
+            }
+        } catch (error) {
+            console.error('[EditPropertyModal] Exception during delete:', error);
         }
+    };
+
+    const handleCancelDelete = () => {
+        console.log('[EditPropertyModal] User cancelled delete');
+        setShowDeleteConfirm(false);
     };
 
     if (!visible) return null;
@@ -213,6 +234,7 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
     const showFormulaField = hasExistingFormula || userIsTypingFormula;
 
     return (
+        <>
         <Modal transparent animationType={Platform.OS === 'ios' ? 'slide' : 'fade'} visible={visible} onRequestClose={onClose}>
             <View style={[AppStyles.modalOverlay, { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)' }]}>
                 <View style={[AppStyles.card, { width: '90%', maxWidth: 520, padding: 16 }]}> 
@@ -277,6 +299,93 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
                 </View>
             </View>
         </Modal>
+
+        {/* Custom Delete Confirmation Modal */}
+        <Modal
+            visible={showDeleteConfirm}
+            transparent={true}
+            animationType="fade"
+            onRequestClose={handleCancelDelete}
+        >
+            <View style={{
+                flex: 1,
+                backgroundColor: 'rgba(0,0,0,0.5)',
+                justifyContent: 'center',
+                alignItems: 'center',
+                padding: 20
+            }}>
+                <View style={{
+                    backgroundColor: 'white',
+                    borderRadius: 12,
+                    padding: 24,
+                    minWidth: 300,
+                    maxWidth: 400
+                }}>
+                    <Text style={{
+                        fontSize: 18,
+                        fontWeight: '600',
+                        textAlign: 'center',
+                        marginBottom: 16,
+                        color: '#1F2937'
+                    }}>
+                        Bevestig
+                    </Text>
+                    
+                    <Text style={{
+                        fontSize: 16,
+                        textAlign: 'center',
+                        marginBottom: 24,
+                        color: '#4B5563',
+                        lineHeight: 24
+                    }}>
+                        Weet je zeker dat je deze eigenschap wilt verwijderen?
+                    </Text>
+                    
+                    <View style={{
+                        flexDirection: 'row',
+                        justifyContent: 'space-between',
+                        gap: 12
+                    }}>
+                        <TouchableOpacity
+                            onPress={handleCancelDelete}
+                            style={{
+                                flex: 1,
+                                paddingVertical: 10,
+                                paddingHorizontal: 14,
+                                backgroundColor: colors.lightGray200,
+                                borderRadius: 8
+                            }}
+                        >
+                            <Text style={{
+                                color: colors.lightGray800,
+                                fontWeight: '600',
+                                textAlign: 'center'
+                            }}>Annuleer</Text>
+                        </TouchableOpacity>
+                        
+                        <TouchableOpacity
+                            onPress={handleConfirmDelete}
+                            style={{
+                                flex: 1,
+                                paddingVertical: 10,
+                                paddingHorizontal: 14,
+                                backgroundColor: colors.red600,
+                                borderRadius: 8
+                            }}
+                        >
+                            <Text style={{
+                                color: colors.white,
+                                fontWeight: '600',
+                                textAlign: 'center'
+                            }}>
+                                Verwijder
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </View>
+        </Modal>
+        </>
     );
 };
 

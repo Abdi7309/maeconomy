@@ -126,6 +126,7 @@ const AddPropertyScreen = ({ ...props }) => {
     const [selectedFormula, setSelectedFormula] = useState(null);
     const [showAddFormulaModal, setShowAddFormulaModal] = useState(false);
     const [showFormulaPickerModal, setShowFormulaPickerModal] = useState(false);
+    const [editingFormula, setEditingFormula] = useState(null);
     // Track which waarde input was last focused so we can insert a picked formula
     const [lastFocusedValuePropertyId, setLastFocusedValuePropertyId] = useState(null);
 
@@ -879,14 +880,56 @@ const AddPropertyScreen = ({ ...props }) => {
             {/* Modals */}
             <AddFormulaModal
                 visible={showAddFormulaModal}
-                onClose={() => setShowAddFormulaModal(false)}
+                onClose={() => {
+                    const wasEditing = !!editingFormula;
+                    setShowAddFormulaModal(false);
+                    setEditingFormula(null);
+                    // If user was editing and chose Annuleer, return to formula picker
+                    if (wasEditing) {
+                        setTimeout(() => setShowFormulaPickerModal(true), 0);
+                    }
+                }}
                 onSave={handleFormulaSaved}
+                editingFormula={editingFormula}
+                onDelete={(deleted) => {
+                    console.log('[AddPropertyScreen] onDelete callback called with:', deleted);
+                    if (deleted.__deleted) {
+                        console.log('[AddPropertyScreen] Processing delete for id:', deleted.id);
+                        setFormulas(prev => {
+                            const filtered = prev.filter(f => f.id !== deleted.id);
+                            console.log('[AddPropertyScreen] Formulas before filter:', prev.length, 'after filter:', filtered.length);
+                            return filtered;
+                        });
+                        // Refetch from backend to ensure sync (in case of race conditions)
+                        (async () => {
+                            try {
+                                console.log('[AddPropertyScreen] Refetching formulas from API');
+                                const fresh = await fetchFormulasApi();
+                                if (Array.isArray(fresh)) {
+                                    console.log('[AddPropertyScreen] Refetch successful, got', fresh.length, 'formulas');
+                                    setFormulas(fresh);
+                                } else {
+                                    console.log('[AddPropertyScreen] Refetch returned non-array:', fresh);
+                                }
+                            } catch (e) {
+                                console.log('[AddPropertyScreen] Refetch after delete failed', e);
+                            }
+                        })();
+                    } else {
+                        console.log('[AddPropertyScreen] Delete callback called but __deleted flag is false');
+                    }
+                }}
             />
             <FormulaPickerModal
                 visible={showFormulaPickerModal}
                 onClose={() => setShowFormulaPickerModal(false)}
                 formulas={formulas}
                 onSelectFormula={handleFormulaSelected}
+                onEditFormula={(formula) => {
+                    setShowFormulaPickerModal(false);
+                    setEditingFormula(formula);
+                    setTimeout(() => setShowAddFormulaModal(true), 0);
+                }}
             />
         </View>
     );

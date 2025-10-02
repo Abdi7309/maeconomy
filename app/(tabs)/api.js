@@ -272,10 +272,21 @@ export const updateFormula = async (id, name, formula) => {
 
 export const deleteFormula = async (id) => {
     try {
-        const response = await fetch(`${CONFIG.API_BASE_URL}?entity=formulas&id=${id}`, {
+        console.log('[deleteFormula] Starting delete for ID:', id);
+        const url = `${CONFIG.API_BASE_URL}?entity=formulas&id=${id}`;
+        console.log('[deleteFormula] URL:', url);
+        
+        const response = await fetch(url, {
             method: 'DELETE'
         });
-        return await response.json();
+        
+        console.log('[deleteFormula] Response status:', response.status);
+        console.log('[deleteFormula] Response ok:', response.ok);
+        
+        const result = await response.json();
+        console.log('[deleteFormula] Response data:', result);
+        
+        return result;
     } catch (error) {
         console.error('Error deleting formula:', error);
         return { success: false, message: 'Failed to delete formula' };

@@ -820,10 +820,10 @@ switch ($entity) {
                     $new_id = $pdo->lastInsertId();
                     error_log("Formula created with ID: " . $new_id);
                     http_response_code(201);
-                    echo json_encode(["message" => "Formula created successfully.", "id" => $new_id]);
+                    echo json_encode(["message" => "Formula created successfully.", "id" => $new_id, "success" => true]);
                 } else {
                     http_response_code(500);
-                    echo json_encode(["message" => "Failed to create formula."]);
+                    echo json_encode(["message" => "Failed to create formula.", "success" => false]);
                 }
                 break;
 
@@ -842,10 +842,10 @@ switch ($entity) {
                 $stmt = $pdo->prepare("UPDATE formulas SET name = ?, formula = ?, updated_at = NOW() WHERE id = ?");
                 if ($stmt->execute([$input['name'], $input['formula'], $id])) {
                     http_response_code(200);
-                    echo json_encode(["message" => "Formula updated successfully."]);
+                    echo json_encode(["message" => "Formula updated successfully.", "id" => $id, "success" => true]);
                 } else {
                     http_response_code(500);
-                    echo json_encode(["message" => "Failed to update formula."]);
+                    echo json_encode(["message" => "Failed to update formula.", "success" => false]);
                 }
                 break;
 
@@ -856,13 +856,20 @@ switch ($entity) {
                     break;
                 }
                 
+                // First detach any properties referencing this formula (avoid dangling FK if constraints added later)
+                try {
+                    $detach = $pdo->prepare("UPDATE eigenschappen SET formula_id = NULL WHERE formula_id = ?");
+                    $detach->execute([$id]);
+                } catch (Exception $e) {
+                    debug_log('Failed detaching properties from formula id=' . $id . ' msg=' . $e->getMessage());
+                }
                 $stmt = $pdo->prepare("DELETE FROM formulas WHERE id = ?");
                 if ($stmt->execute([$id])) {
                     http_response_code(200);
-                    echo json_encode(["message" => "Formula deleted successfully."]);
+                    echo json_encode(["message" => "Formula deleted successfully.", "id" => $id, "success" => true]);
                 } else {
                     http_response_code(500);
-                    echo json_encode(["message" => "Failed to delete formula."]);
+                    echo json_encode(["message" => "Failed to delete formula.", "success" => false]);
                 }
                 break;
 
