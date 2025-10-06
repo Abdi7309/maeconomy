@@ -2,9 +2,9 @@ import { Calculator } from 'lucide-react-native';
 import { Modal, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import AppStyles, { colors } from '../../AppStyles';
 
-const FormulaPickerModal = ({ visible, onClose, formulas = [], onSelectFormula, onEditFormula }) => {
-    // Extra safety check to ensure formulas is always an array
-    const formulasList = Array.isArray(formulas) ? formulas : [];
+const FormulePickerModal = ({ visible, onClose, Formules = [], onSelectFormule, onEditFormule }) => {
+    // Extra safety check to ensure Formules is always an array
+    const FormulesList = Array.isArray(Formules) ? Formules : [];
     
     return (
         <Modal
@@ -20,7 +20,7 @@ const FormulaPickerModal = ({ visible, onClose, formulas = [], onSelectFormula, 
                     </View>
 
                     <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={{ paddingBottom: 12 }}>
-                        {formulasList.length === 0 ? (
+                        {FormulesList.length === 0 ? (
                             <View style={{ padding: 20, alignItems: 'center' }}>
                                 <Calculator size={48} color={colors.lightGray400} />
                                 <Text style={[AppStyles.infoText, { marginTop: 12 }]}>
@@ -33,11 +33,11 @@ const FormulaPickerModal = ({ visible, onClose, formulas = [], onSelectFormula, 
                         ) : (
                             <View>
                                 <Text style={[AppStyles.formLabel, { marginBottom: 12, fontSize: 16 }]}>
-                                    Beschikbare Formules ({formulasList.length})
+                                    Beschikbare Formules ({FormulesList.length})
                                 </Text>
-                                {formulasList.map((formula) => (
+                                {FormulesList.map((Formule) => (
                                     <View
-                                        key={formula.id}
+                                        key={Formule.id}
                                         style={[
                                             AppStyles.filterOption,
                                             {
@@ -53,22 +53,33 @@ const FormulaPickerModal = ({ visible, onClose, formulas = [], onSelectFormula, 
                                         ]}
                                     >
                                         <TouchableOpacity
-                                            onPress={() => { onSelectFormula(formula); onClose(); }}
+                                            onPress={() => { onSelectFormule(Formule); onClose(); }}
                                             style={{ flexDirection: 'row', flex: 1, alignItems: 'center' }}
                                         >
                                             <Calculator size={20} color={colors.blue600} />
-                                            <View style={{ marginLeft: 12, flex: 1 }}>
-                                                <Text style={[AppStyles.propertyName, { fontSize: 16, fontWeight: '600' }]}>
-                                                    {formula.name}
+                                            <View style={{ marginLeft: 16, flex: 1 }}>
+                                                <Text style={[AppStyles.propertyName, { fontSize: 16, fontWeight: '600', marginLeft: -3 }]}>
+                                                    {Formule.name}
                                                 </Text>
                                                 <Text style={[AppStyles.infoText, { marginTop: 4, color: colors.lightGray600, fontSize: 14 }]}>
-                                                    {formula.formula}
+                                                    {Formule.Formule}
                                                 </Text>
                                             </View>
                                         </TouchableOpacity>
-                                        {onEditFormula && (
-                                            <TouchableOpacity onPress={() => onEditFormula(formula)} style={{ paddingHorizontal: 8, paddingVertical: 4 }}>
-                                                <Text style={{ color: colors.blue600, fontWeight: '600' }}>Bewerk</Text>
+                                        {onEditFormule && (
+                                            <TouchableOpacity 
+                                                onPress={() => onEditFormule(Formule)} 
+                                                style={{ 
+                                                    paddingHorizontal: 8, 
+                                                    paddingVertical: 16,
+                                                    borderLeftWidth: 1,
+                                                    borderLeftColor: '#000000',
+                                                    marginLeft: 8,
+                                                    height: 50,
+                                                    justifyContent: 'center'
+                                                }}
+                                            >
+                                                <Text style={{ color: '#000000', fontWeight: '600' }}>Bewerken</Text>
                                             </TouchableOpacity>
                                         )}
                                     </View>
@@ -88,4 +99,4 @@ const FormulaPickerModal = ({ visible, onClose, formulas = [], onSelectFormula, 
     );
 };
 
-export default FormulaPickerModal;
+export default FormulePickerModal;

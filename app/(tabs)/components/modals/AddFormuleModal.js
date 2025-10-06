@@ -1,77 +1,77 @@
 import { useEffect, useState } from 'react';
 import { Alert, Modal, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import AppStyles from '../../AppStyles';
-import { createFormula, deleteFormula, updateFormula } from '../../api';
+import { createFormule, deleteFormule, updateFormule } from '../../api';
 
-const AddFormulaModal = ({ visible, onClose, onSave, editingFormula = null, onDelete }) => {
-    const isEditing = !!editingFormula;
-    const [formulaName, setFormulaName] = useState(editingFormula?.name || '');
-    const [formulaExpression, setFormulaExpression] = useState(editingFormula?.formula || '');
+const AddFormuleModal = ({ visible, onClose, onSave, editingFormule = null, onDelete }) => {
+    const isEditing = !!editingFormule;
+    const [FormuleName, setFormuleName] = useState(editingFormule?.name || '');
+    const [FormuleExpression, setFormuleExpression] = useState(editingFormule?.Formule || '');
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
     useEffect(() => {
         if (visible) {
-            setFormulaName(editingFormula?.name || '');
-            setFormulaExpression(editingFormula?.formula || '');
+            setFormuleName(editingFormule?.name || '');
+            setFormuleExpression(editingFormule?.Formule || '');
         }
-    }, [visible, editingFormula]);
+    }, [visible, editingFormule]);
 
     const handleSave = async () => {
         try {
             let result;
             if (isEditing) {
-                result = await updateFormula(editingFormula.id, formulaName, formulaExpression);
+                result = await updateFormule(editingFormule.id, FormuleName, FormuleExpression);
             } else {
-                result = await createFormula(formulaName, formulaExpression);
+                result = await createFormule(FormuleName, FormuleExpression);
             }
             if (result && (result.id || result.success)) {
-                const id = result.id || editingFormula.id;
-                onSave({ id, name: formulaName, formula: formulaExpression, __edited: isEditing });
-                setFormulaName('');
-                setFormulaExpression('');
+                const id = result.id || editingFormule.id;
+                onSave({ id, name: FormuleName, Formule: FormuleExpression, __edited: isEditing });
+                setFormuleName('');
+                setFormuleExpression('');
                 Alert.alert('Succes', isEditing ? 'Formule bijgewerkt.' : 'Formule aangemaakt.');
                 onClose();
             } else {
-                console.error('Error saving formula:', result.message);
+                console.error('Error saving Formule:', result.message);
                 Alert.alert('Fout', result.message || 'Opslaan mislukt.');
             }
         } catch (error) {
-            console.error('Error saving formula:', error);
+            console.error('Error saving Formule:', error);
             Alert.alert('Fout', 'Onbekende fout bij opslaan.');
         }
     };
 
     const handleDelete = async () => {
-        console.log('[AddFormulaModal] Delete button pressed');
-        console.log('[AddFormulaModal] isEditing:', isEditing);
-        console.log('[AddFormulaModal] editingFormula:', editingFormula);
+        console.log('[AddFormuleModal] Delete button pressed');
+        console.log('[AddFormuleModal] isEditing:', isEditing);
+        console.log('[AddFormuleModal] editingFormule:', editingFormule);
         
         if (!isEditing) {
-            console.log('[AddFormulaModal] Not in editing mode, returning');
+            console.log('[AddFormuleModal] Not in editing mode, returning');
             return;
         }
-        if (!editingFormula?.id) {
-            console.log('[AddFormulaModal] No formula ID found');
+        if (!editingFormule?.id) {
+            console.log('[AddFormuleModal] No Formule ID found');
             Alert.alert('Fout', 'Geen formule ID gevonden.');
             return;
         }
         
-        console.log('[AddFormulaModal] Showing confirmation dialog');
+        console.log('[AddFormuleModal] Showing confirmation dialog');
         setShowDeleteConfirm(true);
     };
 
     const handleConfirmDelete = async () => {
-        console.log('[Delete] User confirmed delete, starting delete for formula ID:', editingFormula.id);
-        console.log('[Delete] About to call deleteFormula...');
+        console.log('[Delete] User confirmed delete, starting delete for Formule ID:', editingFormule.id);
+        console.log('[Delete] About to call deleteFormule...');
         setShowDeleteConfirm(false);
         
         try {
-            const res = await deleteFormula(editingFormula.id);
+            const res = await deleteFormule(editingFormule.id);
             console.log('[Delete] API Response:', res);
             
             if (res && res.success === true) {
                 console.log('[Delete] Success - calling onDelete callback');
-                onDelete && onDelete({ id: editingFormula.id, __deleted: true });
+                onDelete && onDelete({ id: editingFormule.id, __deleted: true });
                 Alert.alert('Succes', 'Formule verwijderd.');
                 onClose();
             } else {
@@ -85,7 +85,7 @@ const AddFormulaModal = ({ visible, onClose, onSave, editingFormula = null, onDe
     };
 
     const handleCancelDelete = () => {
-        console.log('[AddFormulaModal] User cancelled delete');
+        console.log('[AddFormuleModal] User cancelled delete');
         setShowDeleteConfirm(false);
     };
 
@@ -99,32 +99,34 @@ const AddFormulaModal = ({ visible, onClose, onSave, editingFormula = null, onDe
                 </Text>
                 
                 <TextInput
-                    placeholder="Formula Name"
-                    value={formulaName}
-                    onChangeText={setFormulaName}
+                    placeholder="Formule Name"
+                    value={FormuleName}
+                    onChangeText={setFormuleName}
                     style={AppStyles.formInput}
                 />
                 
                 <TextInput
-                    placeholder="Formula Expression"
-                    value={formulaExpression}
-                    onChangeText={setFormulaExpression}
-                    style={AppStyles.formInput}
+                    placeholder="Formule Expression"
+                    value={FormuleExpression}
+                    onChangeText={setFormuleExpression}
+                    style={[AppStyles.formInput, { marginTop: 20 }]}
                     multiline
                 />
                 
-                <View style={{ flexDirection:'row', justifyContent:'flex-end', marginTop:24, gap:12, flexWrap:'wrap' }}>
-                    <TouchableOpacity onPress={onClose} style={[AppStyles.btnSecondary, { minWidth:110 }]}> 
-                        <Text style={AppStyles.btnSecondaryText}>Annuleer</Text>
-                    </TouchableOpacity>
+                <View style={{ flexDirection:'row', justifyContent:'space-between', marginTop:24, gap:12, flexWrap:'wrap' }}>
                     {isEditing && (
-                        <TouchableOpacity onPress={handleDelete} style={[AppStyles.btnSecondary, { borderColor:'#DC2626', backgroundColor:'#FEE2E2' }]}> 
-                            <Text style={[AppStyles.btnSecondaryText, { color:'#B91C1C', fontWeight:'600' }]}>Verwijder</Text>
+                        <TouchableOpacity onPress={handleDelete} style={[AppStyles.btnPrimary, AppStyles.btnPrimaryModal, { backgroundColor:'#DC2626' }]}> 
+                            <Text style={AppStyles.btnPrimaryText}>Verwijder</Text>
                         </TouchableOpacity>
                     )}
-                    <TouchableOpacity onPress={handleSave} style={[AppStyles.btnPrimary, AppStyles.btnPrimaryModal]}> 
-                        <Text style={AppStyles.btnPrimaryText}>{isEditing ? 'Update' : 'Opslaan'}</Text>
-                    </TouchableOpacity>
+                    <View style={{ flexDirection:'row', gap:12 }}>
+                        <TouchableOpacity onPress={onClose} style={[AppStyles.btnSecondary, { minWidth:110 }]}> 
+                            <Text style={AppStyles.btnSecondaryText}>Annuleer</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={handleSave} style={[AppStyles.btnPrimary, AppStyles.btnPrimaryModal]}> 
+                            <Text style={AppStyles.btnPrimaryText}>Opslaan</Text>
+                        </TouchableOpacity>
+                    </View>
                 </View>
             </View>
             </View>
@@ -185,16 +187,12 @@ const AddFormulaModal = ({ visible, onClose, onSave, editingFormula = null, onDe
                         
                         <TouchableOpacity
                             onPress={handleConfirmDelete}
-                            style={[AppStyles.btnSecondary, {
+                            style={[AppStyles.btnPrimary, AppStyles.btnPrimaryModal, {
                                 flex: 1,
-                                borderColor: '#DC2626',
-                                backgroundColor: '#FEE2E2'
+                                backgroundColor: '#DC2626'
                             }]}
                         >
-                            <Text style={[AppStyles.btnSecondaryText, {
-                                color: '#B91C1C',
-                                fontWeight: '600'
-                            }]}>
+                            <Text style={AppStyles.btnPrimaryText}>
                                 Verwijder
                             </Text>
                         </TouchableOpacity>
@@ -206,4 +204,4 @@ const AddFormulaModal = ({ visible, onClose, onSave, editingFormula = null, onDe
     );
 };
 
-export default AddFormulaModal;
+export default AddFormuleModal;

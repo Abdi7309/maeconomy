@@ -35,19 +35,19 @@ const buildPropertiesMap = (properties, outputUnit) => {
         visited[prop.name] = true;
         let val = prop.value;
         if (typeof val === 'string' && /[+\-*/]/.test(val)) {
-            let formula = val;
+            let Formule = val;
             properties.forEach(refProp => {
                 if (refProp.name.trim() !== '') {
                     const refValue = getCalculatedValue(refProp, { ...visited });
                     const regex = new RegExp(`\\b${refProp.name}\\b`, 'gi');
-                    formula = formula.replace(regex, refValue);
+                    Formule = Formule.replace(regex, refValue);
                 }
             });
             try {
-                if (/[^0-9+\-*/().\s]/.test(formula)) {
+                if (/[^0-9+\-*/().\s]/.test(Formule)) {
                     return 'Error';
                 }
-                val = roundToDecimals(eval(formula));
+                val = roundToDecimals(eval(Formule));
             } catch (e) {
                 val = 'Error';
             }
@@ -66,8 +66,8 @@ const buildPropertiesMap = (properties, outputUnit) => {
     return map;
 };
 
-const evaluateFormula = (formula, propertiesMap) => {
-    let expression = formula;
+const evaluateFormule = (Formule, propertiesMap) => {
+    let expression = Formule;
     // Replace property names with their numeric values from the map
     Object.keys(propertiesMap).forEach(key => {
         const regex = new RegExp(`\\b${key}\\b`, 'gi');
@@ -107,10 +107,10 @@ const formatNumberForLog = (n, decimals = 6) => {
 };
 
 const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft, onSaved }) => {
-    const initialFormula = property?.formule || property?.formula_expression || '';
+    const initialFormule = property?.formule || property?.Formule_expression || '';
     const [editedName, setEditedName] = useState(property?.name || '');
     const [editedValue, setEditedValue] = useState(property?.waarde || '');
-    const [editedFormula, setEditedFormula] = useState(initialFormula);
+    const [editedFormule, setEditedFormule] = useState(initialFormule);
     const [editedUnit, setEditedUnit] = useState(property?.eenheid || '');
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
@@ -118,7 +118,7 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
         if (visible) {
             setEditedName(property?.name || '');
             setEditedValue(property?.waarde || '');
-            setEditedFormula(property?.formule || property?.formula_expression || '');
+            setEditedFormule(property?.formule || property?.Formule_expression || '');
             setEditedUnit(property?.eenheid || '');
         }
     }, [visible, property]);
@@ -129,7 +129,7 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
             value: p.formule && /[+\-*/]/.test(p.formule)
                 ? (() => {
                     const innerMap = buildPropertiesMap(existingPropertiesDraft.map(x => ({ name: x.name, value: x.waarde, unit: x.eenheid || '' })), p.eenheid || editedUnit || 'm');
-                    const { value: innerVal, error: innerErr } = evaluateFormula(p.formule, innerMap);
+                    const { value: innerVal, error: innerErr } = evaluateFormule(p.formule, innerMap);
                     return innerErr ? 'Error' : String(innerVal);
                 })()
                 : p.waarde,
@@ -140,30 +140,30 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
     }, [existingPropertiesDraft, editedUnit]);
 
     const preview = useMemo(() => {
-        if (!editedFormula || !/[+\-*/]/.test(editedFormula)) {
+        if (!editedFormule || !/[+\-*/]/.test(editedFormule)) {
             return { text: null, error: null };
         }
-        const { value, error } = evaluateFormula(editedFormula, mapForUnit);
+        const { value, error } = evaluateFormule(editedFormule, mapForUnit);
         const numericLog = formatNumberForLog(value, 6);
-        console.log('[EditPropertyModal] preview evaluation', { editedFormula, rawResult: value, ...numericLog, error });
+        console.log('[EditPropertyModal] preview evaluation', { editedFormule, rawResult: value, ...numericLog, error });
         if (error) return { text: error, error: true };
         const roundedForPreview = roundToDecimals(value);
         const finalText = `${roundedForPreview}${editedUnit ? ` ${editedUnit}` : ''}`;
         console.log('[EditPropertyModal] preview final', { finalText });
         return { text: finalText, error: false };
-    }, [editedFormula, mapForUnit, editedUnit]);
+    }, [editedFormule, mapForUnit, editedUnit]);
 
     const handleSave = async () => {
         if (!property?.id) { onClose(); return; }
 
-        const isFormula = editedFormula && /[+\-*/]/.test(editedFormula);
+        const isFormule = editedFormule && /[+\-*/]/.test(editedFormule);
         let waardeToSend = editedValue; // Default to manually entered value
 
-        if (isFormula) {
+        if (isFormule) {
             // Use the already calculated preview value, which is correct.
-            const { value: calculatedValue, error } = evaluateFormula(editedFormula, mapForUnit);
+            const { value: calculatedValue, error } = evaluateFormule(editedFormule, mapForUnit);
             if (!error && calculatedValue !== null) {
-                // The result from evaluateFormula is in the base unit (m).
+                // The result from evaluateFormule is in the base unit (m).
                 // If a different unit is selected for the property, convert the final result.
                 waardeToSend = convertToUnit(calculatedValue, 'm', editedUnit || 'm');
             } else {
@@ -176,8 +176,8 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
         const payload = {
             name: editedName.trim() || property.name,
             waarde: String(roundToDecimals(waardeToSend)), // Ensure it's a rounded string
-            raw_formula: isFormula ? editedFormula : '',
-            formula_id: property?.formula_id || null,
+            raw_Formule: isFormule ? editedFormule : '',
+            Formule_id: property?.Formule_id || null,
             eenheid: editedUnit || '',
         };
 
@@ -187,11 +187,11 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
             onSaved({
                 name: payload.name,
                 waarde: payload.waarde,
-                formule: payload.raw_formula, // Pass back the raw formula for consistency
+                formule: payload.raw_Formule, // Pass back the raw Formule for consistency
                 eenheid: payload.eenheid,
                 // Pass back other relevant fields from the original property if needed
-                formula_id: property.formula_id,
-                formula_expression: payload.raw_formula,
+                Formule_id: property.Formule_id,
+                Formule_expression: payload.raw_Formule,
             });
             onClose();
         }
@@ -228,10 +228,10 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
 
     if (!visible) return null;
 
-    const existingExpression = property?.formule || property?.formula_expression || '';
-    const hasExistingFormula = !!(existingExpression && /[+\-*/]/.test(existingExpression));
-    const userIsTypingFormula = editedFormula && /[+\-*/]/.test(editedFormula);
-    const showFormulaField = hasExistingFormula || userIsTypingFormula;
+    const existingExpression = property?.formule || property?.Formule_expression || '';
+    const hasExistingFormule = !!(existingExpression && /[+\-*/]/.test(existingExpression));
+    const userIsTypingFormule = editedFormule && /[+\-*/]/.test(editedFormule);
+    const showFormuleField = hasExistingFormule || userIsTypingFormule;
 
     return (
         <>
@@ -248,16 +248,16 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
                         style={AppStyles.formInput}
                     />
 
-                    {showFormulaField && (
+                    {showFormuleField && (
                         <>
                             <Text style={[AppStyles.formLabel, { marginTop: 12 }]}>Formule</Text>
                             <TextInput
                                 placeholder="Bijv. lengte * breedte"
-                                value={editedFormula}
-                                onChangeText={(text) => { setEditedFormula(text); }}
+                                value={editedFormule}
+                                onChangeText={(text) => { setEditedFormule(text); }}
                                 style={AppStyles.formInput}
                             />
-                            {editedFormula && /[+\-*/]/.test(editedFormula) && (
+                            {editedFormule && /[+\-*/]/.test(editedFormule) && (
                                 preview.error ? (
                                     <Text style={{ color: colors.red600, marginTop: 6, fontSize: 14 }}>{preview.text}</Text>
                                 ) : preview.text ? (

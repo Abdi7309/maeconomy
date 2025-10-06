@@ -491,7 +491,7 @@ const AppStyles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
     },
-    // Backward-compatible names used by some modals (FormulaPickerModal, AddFormulaModal)
+    // Backward-compatible names used by some modals (FormulePickerModal, AddFormuleModal)
     // Keep these separate so we can tweak widths independently if needed.
     modalOverlay: {
         flex: 1,

@@ -3,12 +3,12 @@ import * as ImagePicker from 'expo-image-picker';
 import { Calculator, ChevronLeft, FileText, Paperclip, Plus, Tag, X } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, ScrollView, StatusBar, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { fetchFormulas as fetchFormulasApi } from '../api';
+import { fetchFormules as fetchFormulesApi } from '../api';
 import AppStyles, { colors } from '../AppStyles';
-import AddFormulaModal from '../components/modals/AddFormulaModal';
+import AddFormuleModal from '../components/modals/AddFormuleModal';
 import AddTemplateModal from '../components/modals/AddTemplateModal';
 import EditPropertyModal from '../components/modals/EditPropertyModal';
-import FormulaPickerModal from '../components/modals/FormulaPickerModal';
+import FormulePickerModal from '../components/modals/FormulePickerModal';
 import TemplatePickerModal from '../components/modals/TemplatePickerModal';
 
 const buildPropertiesMap = (properties, outputUnit) => {
@@ -21,23 +21,23 @@ const buildPropertiesMap = (properties, outputUnit) => {
         visited[prop.name] = true;
 
         let val = prop.value;
-        // If it's a formula, replace referenced properties with their calculated values
+        // If it's a Formule, replace referenced properties with their calculated values
         if (typeof val === 'string' && /[+\-*/]/.test(val)) {
-            let formula = val;
+            let Formule = val;
             properties.forEach(refProp => {
                 if (refProp.name.trim() !== '') {
                     // Recursively get the calculated value for referenced property
                     const refValue = getCalculatedValue(refProp, { ...visited });
                     const regex = new RegExp(`\\b${refProp.name}\\b`, "gi");
-                    formula = formula.replace(regex, refValue);
+                    Formule = Formule.replace(regex, refValue);
                 }
             });
             try {
                 // Reject if unknown identifiers remain
-                if (/[^0-9+\-*/().\s]/.test(formula)) {
+                if (/[^0-9+\-*/().\s]/.test(Formule)) {
                     return 'Error';
                 }
-                val = eval(formula);
+                val = eval(Formule);
             } catch (e) {
                 val = 'Error';
             }
@@ -59,8 +59,8 @@ const buildPropertiesMap = (properties, outputUnit) => {
     return map;
 };
 
-const evaluateFormula = (formula, propertiesMap) => {
-    let expression = formula;
+const evaluateFormule = (Formule, propertiesMap) => {
+    let expression = Formule;
     // Replace property references first
     Object.keys(propertiesMap).forEach(key => {
         const regex = new RegExp(`\\b${key}\\b`, 'gi');
@@ -116,18 +116,18 @@ const AddPropertyScreen = ({ ...props }) => {
     const [outputUnit, setOutputUnit] = useState('m'); // default to meters
     const [editingProperty, setEditingProperty] = useState(null);
     const [editedValue, setEditedValue] = useState('');
-    const [editedFormula, setEditedFormula] = useState('');
+    const [editedFormule, setEditedFormule] = useState('');
     const [existingPropertiesDraft, setExistingPropertiesDraft] = useState([]);
     const [editedUnit, setEditedUnit] = useState('');
     const [editedName, setEditedName] = useState('');
     const [showEditModal, setShowEditModal] = useState(false);
     const [modalPropertyIndex, setModalPropertyIndex] = useState(null);
-    const [formulas, setFormulas] = useState([]);
-    const [selectedFormula, setSelectedFormula] = useState(null);
-    const [showAddFormulaModal, setShowAddFormulaModal] = useState(false);
-    const [showFormulaPickerModal, setShowFormulaPickerModal] = useState(false);
-    const [editingFormula, setEditingFormula] = useState(null);
-    // Track which waarde input was last focused so we can insert a picked formula
+    const [Formules, setFormules] = useState([]);
+    const [selectedFormule, setSelectedFormule] = useState(null);
+    const [showAddFormuleModal, setShowAddFormuleModal] = useState(false);
+    const [showFormulePickerModal, setShowFormulePickerModal] = useState(false);
+    const [editingFormule, setEditingFormule] = useState(null);
+    // Track which waarde input was last focused so we can insert a picked Formule
     const [lastFocusedValuePropertyId, setLastFocusedValuePropertyId] = useState(null);
 
     const webInputRef = useRef(null);
@@ -147,31 +147,31 @@ const AddPropertyScreen = ({ ...props }) => {
         return Math.round(value * factor) / factor;
     };
 
-    // Fetch formulas on component mount
+    // Fetch Formules on component mount
     useEffect(() => {
         (async () => {
             try {
-                const formulasData = await fetchFormulasApi();
-                setFormulas(Array.isArray(formulasData) ? formulasData : []);
+                const FormulesData = await fetchFormulesApi();
+                setFormules(Array.isArray(FormulesData) ? FormulesData : []);
             } catch (error) {
-                console.error('Error fetching formulas (mount):', error);
-                setFormulas([]);
+                console.error('Error fetching Formules (mount):', error);
+                setFormules([]);
             }
         })();
     }, []);
 
     useEffect(() => {
-        if (showFormulaPickerModal) {
+        if (showFormulePickerModal) {
             (async () => {
                 try {
-                    const formulasData = await fetchFormulasApi();
-                    setFormulas(Array.isArray(formulasData) ? formulasData : []);
+                    const FormulesData = await fetchFormulesApi();
+                    setFormules(Array.isArray(FormulesData) ? FormulesData : []);
                 } catch (e) {
-                    console.error('Error refreshing formulas on open:', e);
+                    console.error('Error refreshing Formules on open:', e);
                 }
             })();
         }
-    }, [showFormulaPickerModal]);
+    }, [showFormulePickerModal]);
 
     // Initialize or refresh the draft when item.properties changes
     useEffect(() => {
@@ -179,9 +179,9 @@ const AddPropertyScreen = ({ ...props }) => {
             id: p.id,
             name: p.name,
             waarde: p.waarde,
-            formula_id: p.formula_id || null,
-            formula_name: p.formula_name || '',
-            formula_expression: p.formula_expression || '',
+            Formule_id: p.Formule_id || null,
+            Formule_name: p.Formule_name || '',
+            Formule_expression: p.Formule_expression || '',
             eenheid: p.eenheid || ''
         }));
         setExistingPropertiesDraft(draft);
@@ -194,7 +194,7 @@ const AddPropertyScreen = ({ ...props }) => {
                 name: '',
                 value: '',
                 unit: '', 
-                formula_id: null,
+                Formule_id: null,
                 files: []
             };
             setNextNewPropertyId(prevId => prevId + 1);
@@ -202,20 +202,20 @@ const AddPropertyScreen = ({ ...props }) => {
         });
     };
 
-    const handleFormulaSaved = (newFormula) => {
-        setFormulas(prev => [...prev, newFormula]);
+    const handleFormuleSaved = (newFormule) => {
+        setFormules(prev => [...prev, newFormule]);
     };
 
-    const handleFormulaSelected = (formula) => {
-        // Always create a NEW property row for the selected formula instead of replacing an existing one
+    const handleFormuleSelected = (Formule) => {
+        // Always create a NEW property row for the selected Formule instead of replacing an existing one
         setNewPropertiesList(prevList => [
             ...prevList,
             {
                 id: nextNewPropertyId,
-                name: formula.name,
-                value: formula.formula,
+                name: Formule.name,
+                value: Formule.Formule,
                 unit: '',
-                formula_id: formula.id,
+                Formule_id: Formule.id,
                 files: []
             }
         ]);
@@ -335,21 +335,21 @@ const AddPropertyScreen = ({ ...props }) => {
         const propertiesToSave = newPropertiesList
             .filter(prop => prop.name.trim() !== '')
             .map(prop => {
-                const isFormula = prop.value && /[+\-*/]/.test(prop.value);
+                const isFormule = prop.value && /[+\-*/]/.test(prop.value);
                 let finalValue = prop.value;
-                let rawFormula = '';
+                let rawFormule = '';
 
-                if (isFormula) {
-                    rawFormula = prop.value;
+                if (isFormule) {
+                    rawFormule = prop.value;
                     const propertiesMap = buildPropertiesMap(newPropertiesList, prop.unit || 'm');
-                    const { value: calculatedValue, error } = evaluateFormula(prop.value, propertiesMap);
+                    const { value: calculatedValue, error } = evaluateFormule(prop.value, propertiesMap);
 
                     if (!error && calculatedValue !== null) {
-                        // The result from evaluateFormula is in the base unit (m).
+                        // The result from evaluateFormule is in the base unit (m).
                         // Convert to the property's specific unit if it exists.
                         finalValue = convertToUnit(calculatedValue, 'm', prop.unit || 'm');
                     } else {
-                        // On error, save the raw formula string as the value for debugging
+                        // On error, save the raw Formule string as the value for debugging
                         finalValue = prop.value;
                     }
                 }
@@ -357,7 +357,7 @@ const AddPropertyScreen = ({ ...props }) => {
                 return {
                     ...prop,
                     waarde: String(roundToDecimals(finalValue)), // Ensure value is a rounded string
-                    raw_formula: rawFormula,
+                    raw_Formule: rawFormule,
                 };
             });
 
@@ -400,9 +400,9 @@ const AddPropertyScreen = ({ ...props }) => {
             name: p.name,
             value: p.formule && /[+\-*/]/.test(p.formule)
                 ? (() => {
-                    // Evaluate nested formulas within the draft first
+                    // Evaluate nested Formules within the draft first
                     const innerMap = buildPropertiesMap(existingPropertiesDraft.map(x => ({ name: x.name, value: x.waarde, unit: x.eenheid || '' })), p.eenheid || outputUnit);
-                    const { value: innerVal, error: innerErr } = evaluateFormula(p.formule, innerMap);
+                    const { value: innerVal, error: innerErr } = evaluateFormule(p.formule, innerMap);
                     return innerErr ? 'Error' : String(innerVal);
                 })()
                 : p.waarde,
@@ -418,7 +418,7 @@ const AddPropertyScreen = ({ ...props }) => {
             value: p.formule && /[+\-*/]/.test(p.formule)
                 ? (() => {
                     const innerMap = buildPropertiesMap(draft.map(x => ({ name: x.name, value: x.waarde, unit: x.eenheid || '' })), p.eenheid || outputUnit);
-                    const { value: innerVal, error: innerErr } = evaluateFormula(p.formule, innerMap);
+                    const { value: innerVal, error: innerErr } = evaluateFormule(p.formule, innerMap);
                     return innerErr ? 'Error' : String(innerVal);
                 })()
                 : p.waarde,
@@ -427,7 +427,7 @@ const AddPropertyScreen = ({ ...props }) => {
         return buildPropertiesMap(props, outputUnit);
     };
 
-    // (Removed old local fetchFormulas using wrong endpoint path)
+    // (Removed old local fetchFormules using wrong endpoint path)
 
     return (
         <View style={[AppStyles.screen, { backgroundColor: colors.white, flex: 1 }]}>
@@ -522,7 +522,7 @@ const AddPropertyScreen = ({ ...props }) => {
                                             {/* Right Side */}
                                             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                                                 <View style={{ alignItems: 'flex-end' }}>
-                                                {prop.formula_expression && prop.formula_expression.trim() !== '' && (
+                                                {prop.Formule_expression && prop.Formule_expression.trim() !== '' && (
                                                     <Text
                                                         style={{
                                                             color: colors.lightGray500,
@@ -530,7 +530,7 @@ const AddPropertyScreen = ({ ...props }) => {
                                                             fontStyle: 'italic',
                                                         }}
                                                     >
-                                                        Formule: {prop.formula_expression}
+                                                        Formule: {prop.Formule_expression}
                                                     </Text>
                                                 )}
                                                 <Text style={[AppStyles.propertyValue, { marginTop: 4 }]}>
@@ -603,12 +603,12 @@ const AddPropertyScreen = ({ ...props }) => {
                                     i === idx ? { ...p, ...updated } : p
                                 ));
 
-                                // 2. Re-compute all properties that have a formula
+                                // 2. Re-compute all properties that have a Formule
                                 const recomputedDraft = baselineDraft.map(p => {
-                                    if (p.formula_expression && /[+\-*/]/.test(p.formula_expression)) {
+                                    if (p.Formule_expression && /[+\-*/]/.test(p.Formule_expression)) {
                                         const outputUnit = p.eenheid || 'm';
                                         const map = buildExistingPropertiesMapFromDraft(baselineDraft, outputUnit);
-                                        const { value, error } = evaluateFormula(p.formula_expression, map);
+                                        const { value, error } = evaluateFormule(p.Formule_expression, map);
 
                                         if (error || value === null) {
                                             return { ...p, waarde: 'Error' };
@@ -634,8 +634,8 @@ const AddPropertyScreen = ({ ...props }) => {
                                             updatePromises.push(props.onUpdate(newProp.id, {
                                                 name: newProp.name,
                                                 waarde: newProp.waarde,
-                                                raw_formula: newProp.formula_expression,
-                                                formula_id: newProp.formula_id,
+                                                raw_Formule: newProp.Formule_expression,
+                                                Formule_id: newProp.Formule_id,
                                                 eenheid: newProp.eenheid,
                                             }));
                                         }
@@ -733,7 +733,7 @@ const AddPropertyScreen = ({ ...props }) => {
                                             {prop.value && /[+\-*/]/.test(prop.value) && (() => {
                                                 const outputUnit = prop.unit;
                                                 const propertiesMap = buildPropertiesMap(newPropertiesList, outputUnit);
-                                                const { value: result, error } = evaluateFormula(prop.value, propertiesMap);
+                                                const { value: result, error } = evaluateFormule(prop.value, propertiesMap);
                                                 if (error) {
                                                     return (
                                                         <Text style={{ color: colors.red600, marginTop: 6, fontSize: 14 }}>
@@ -793,7 +793,7 @@ const AddPropertyScreen = ({ ...props }) => {
                                             {prop.value && /[+\-*/]/.test(prop.value) && (() => {
                                                 const outputUnit = prop.unit;
                                                 const propertiesMap = buildPropertiesMap(newPropertiesList, outputUnit);
-                                                const { value: result, error } = evaluateFormula(prop.value, propertiesMap);
+                                                const { value: result, error } = evaluateFormule(prop.value, propertiesMap);
                                                 if (error) {
                                                     return (
                                                         <Text style={{ color: colors.red600, marginTop: 6, fontSize: 14 }}>
@@ -862,9 +862,9 @@ const AddPropertyScreen = ({ ...props }) => {
                     </View>
                 </ScrollView>
                 
-                {/* Formula Picker FAB (positioned just above Add Property FAB) */}
+                {/* Formule Picker FAB (positioned just above Add Property FAB) */}
                 <TouchableOpacity
-                    onPress={() => setShowFormulaPickerModal(true)}
+                    onPress={() => setShowFormulePickerModal(true)}
                     /* Main FAB: bottom ~20 (1.25*16), height ~56 (3.5*16). Desired gap = 16. 20 + 56 + 16 = 92 */
                     style={[AppStyles.filterFab, { bottom: 92 }]} // precise 16px gap above main FAB
                 >
@@ -878,36 +878,36 @@ const AddPropertyScreen = ({ ...props }) => {
             </KeyboardAvoidingView>
 
             {/* Modals */}
-            <AddFormulaModal
-                visible={showAddFormulaModal}
+            <AddFormuleModal
+                visible={showAddFormuleModal}
                 onClose={() => {
-                    const wasEditing = !!editingFormula;
-                    setShowAddFormulaModal(false);
-                    setEditingFormula(null);
-                    // If user was editing and chose Annuleer, return to formula picker
+                    const wasEditing = !!editingFormule;
+                    setShowAddFormuleModal(false);
+                    setEditingFormule(null);
+                    // If user was editing and chose Annuleer, return to Formule picker
                     if (wasEditing) {
-                        setTimeout(() => setShowFormulaPickerModal(true), 0);
+                        setTimeout(() => setShowFormulePickerModal(true), 0);
                     }
                 }}
-                onSave={handleFormulaSaved}
-                editingFormula={editingFormula}
+                onSave={handleFormuleSaved}
+                editingFormule={editingFormule}
                 onDelete={(deleted) => {
                     console.log('[AddPropertyScreen] onDelete callback called with:', deleted);
                     if (deleted.__deleted) {
                         console.log('[AddPropertyScreen] Processing delete for id:', deleted.id);
-                        setFormulas(prev => {
+                        setFormules(prev => {
                             const filtered = prev.filter(f => f.id !== deleted.id);
-                            console.log('[AddPropertyScreen] Formulas before filter:', prev.length, 'after filter:', filtered.length);
+                            console.log('[AddPropertyScreen] Formules before filter:', prev.length, 'after filter:', filtered.length);
                             return filtered;
                         });
                         // Refetch from backend to ensure sync (in case of race conditions)
                         (async () => {
                             try {
-                                console.log('[AddPropertyScreen] Refetching formulas from API');
-                                const fresh = await fetchFormulasApi();
+                                console.log('[AddPropertyScreen] Refetching Formules from API');
+                                const fresh = await fetchFormulesApi();
                                 if (Array.isArray(fresh)) {
-                                    console.log('[AddPropertyScreen] Refetch successful, got', fresh.length, 'formulas');
-                                    setFormulas(fresh);
+                                    console.log('[AddPropertyScreen] Refetch successful, got', fresh.length, 'Formules');
+                                    setFormules(fresh);
                                 } else {
                                     console.log('[AddPropertyScreen] Refetch returned non-array:', fresh);
                                 }
@@ -920,15 +920,15 @@ const AddPropertyScreen = ({ ...props }) => {
                     }
                 }}
             />
-            <FormulaPickerModal
-                visible={showFormulaPickerModal}
-                onClose={() => setShowFormulaPickerModal(false)}
-                formulas={formulas}
-                onSelectFormula={handleFormulaSelected}
-                onEditFormula={(formula) => {
-                    setShowFormulaPickerModal(false);
-                    setEditingFormula(formula);
-                    setTimeout(() => setShowAddFormulaModal(true), 0);
+            <FormulePickerModal
+                visible={showFormulePickerModal}
+                onClose={() => setShowFormulePickerModal(false)}
+                Formules={Formules}
+                onSelectFormule={handleFormuleSelected}
+                onEditFormule={(Formule) => {
+                    setShowFormulePickerModal(false);
+                    setEditingFormule(Formule);
+                    setTimeout(() => setShowAddFormuleModal(true), 0);
                 }}
             />
         </View>

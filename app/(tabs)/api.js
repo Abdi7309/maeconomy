@@ -147,18 +147,18 @@ export const handleAddObject = async (parentPath, newObjectData, userToken) => {
  */
 export const addProperties = async (objectId, properties) => {
     try {
-        // Submit sequentially to ensure dependency order (formulas can reference earlier properties)
+        // Submit sequentially to ensure dependency order (Formules can reference earlier properties)
         for (const prop of properties) {
             const formData = new FormData();
             formData.append('object_id', objectId);
             formData.append('name', prop.name.trim());
 
-            // The `waarde` and `raw_formula` are now correctly pre-calculated 
+            // The `waarde` and `raw_Formule` are now correctly pre-calculated 
             // in AddPropertyScreen.js. We just need to send them.
             formData.append('waarde', prop.waarde);
-            formData.append('raw_formula', prop.raw_formula || '');
+            formData.append('raw_Formule', prop.raw_Formule || '');
             
-            formData.append('formula_id', prop.formula_id || '');
+            formData.append('Formule_id', prop.Formule_id || '');
             formData.append('eenheid', prop.unit || '');
 
             if (prop.files && prop.files.length > 0) {
@@ -186,7 +186,7 @@ export const addProperties = async (objectId, properties) => {
     }
 };
 
-export const updateProperty = async (propertyId, { name, waarde, raw_formula, formula_id, eenheid }) => {
+export const updateProperty = async (propertyId, { name, waarde, raw_Formule, Formule_id, eenheid }) => {
     try {
         const response = await fetch(`${CONFIG.API_BASE_URL}?entity=properties&id=${propertyId}`, {
             method: 'PUT',
@@ -194,8 +194,8 @@ export const updateProperty = async (propertyId, { name, waarde, raw_formula, fo
             body: JSON.stringify({ 
                 name, 
                 waarde, 
-                raw_formula: raw_formula || '',
-                formula_id: formula_id || '', 
+                raw_Formule: raw_Formule || '',
+                Formule_id: Formule_id || '', 
                 eenheid: eenheid || '' 
             }),
         });
@@ -230,66 +230,66 @@ export const deleteProperty = async (propertyId) => {
     }
 };
 
-// --- Formulas API Functions ---
-export const fetchFormulas = async () => {
+// --- Formules API Functions ---
+export const fetchFormules = async () => {
     try {
-        const response = await fetch(`${CONFIG.API_BASE_URL}?entity=formulas`);
-        if (!response.ok) throw new Error('Failed to fetch formulas');
+        const response = await fetch(`${CONFIG.API_BASE_URL}?entity=Formules`);
+        if (!response.ok) throw new Error('Failed to fetch Formules');
         return await response.json();
     } catch (error) {
-        console.error('Failed to fetch formulas:', error);
+        console.error('Failed to fetch Formules:', error);
         return [];
     }
 };
 
-export const createFormula = async (name, formula) => {
+export const createFormule = async (name, Formule) => {
     try {
-        const response = await fetch(`${CONFIG.API_BASE_URL}?entity=formulas`, {
+        const response = await fetch(`${CONFIG.API_BASE_URL}?entity=Formules`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, formula }),
+            body: JSON.stringify({ name, Formule }),
         });
         return await response.json();
     } catch (error) {
-        console.error('Error creating formula:', error);
-        return { success: false, message: 'Failed to create formula' };
+        console.error('Error creating Formule:', error);
+        return { success: false, message: 'Failed to create Formule' };
     }
 };
 
-export const updateFormula = async (id, name, formula) => {
+export const updateFormule = async (id, name, Formule) => {
     try {
-        const response = await fetch(`${CONFIG.API_BASE_URL}?entity=formulas&id=${id}`, {
+        const response = await fetch(`${CONFIG.API_BASE_URL}?entity=Formules&id=${id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, formula }),
+            body: JSON.stringify({ name, Formule }),
         });
         return await response.json();
     } catch (error) {
-        console.error('Error updating formula:', error);
-        return { success: false, message: 'Failed to update formula' };
+        console.error('Error updating Formule:', error);
+        return { success: false, message: 'Failed to update Formule' };
     }
 };
 
-export const deleteFormula = async (id) => {
+export const deleteFormule = async (id) => {
     try {
-        console.log('[deleteFormula] Starting delete for ID:', id);
-        const url = `${CONFIG.API_BASE_URL}?entity=formulas&id=${id}`;
-        console.log('[deleteFormula] URL:', url);
+        console.log('[deleteFormule] Starting delete for ID:', id);
+        const url = `${CONFIG.API_BASE_URL}?entity=Formules&id=${id}`;
+        console.log('[deleteFormule] URL:', url);
         
         const response = await fetch(url, {
             method: 'DELETE'
         });
         
-        console.log('[deleteFormula] Response status:', response.status);
-        console.log('[deleteFormula] Response ok:', response.ok);
+        console.log('[deleteFormule] Response status:', response.status);
+        console.log('[deleteFormule] Response ok:', response.ok);
         
         const result = await response.json();
-        console.log('[deleteFormula] Response data:', result);
+        console.log('[deleteFormule] Response data:', result);
         
         return result;
     } catch (error) {
-        console.error('Error deleting formula:', error);
-        return { success: false, message: 'Failed to delete formula' };
+        console.error('Error deleting Formule:', error);
+        return { success: false, message: 'Failed to delete Formule' };
     }
 };
 
