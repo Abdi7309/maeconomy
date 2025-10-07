@@ -1,6 +1,6 @@
-import { Calculator, ChevronRight, Filter, LogOut, Plus } from 'lucide-react-native';
+import { Calculator, ChevronRight, Filter, LogOut, Menu, Plus } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { RefreshControl, ScrollView, StatusBar, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, RefreshControl, ScrollView, StatusBar, Text, TouchableOpacity, View } from 'react-native';
 import { fetchFormules as fetchFormulesApi } from '../api';
 import AppStyles, { colors } from '../AppStyles';
 import AddFormuleModal from '../components/modals/AddFormuleModal';
@@ -21,6 +21,8 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
     const [showAddFormuleModal, setShowAddFormuleModal] = useState(false);
     const [showFormulePickerModal, setShowFormulePickerModal] = useState(false);
     const [editingFormule, setEditingFormule] = useState(null);
+    const [fabMenuOpen, setFabMenuOpen] = useState(false);
+    const [fabMenuAnimation] = useState(new Animated.Value(0));
 
     // Fetch Formules on component mount
     useEffect(() => {
@@ -77,6 +79,28 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
     const handleFormuleSelected = (Formule) => {
         // For now, just close the modal - could be extended to do something with the selected formula
         console.log('Formula selected:', Formule);
+    };
+
+    const toggleFabMenu = () => {
+        const toValue = fabMenuOpen ? 0 : 1;
+        setFabMenuOpen(!fabMenuOpen);
+        
+        Animated.spring(fabMenuAnimation, {
+            toValue,
+            useNativeDriver: true,
+            tension: 150,
+            friction: 8,
+        }).start();
+    };
+
+    const closeFabMenu = () => {
+        setFabMenuOpen(false);
+        Animated.spring(fabMenuAnimation, {
+            toValue: 0,
+            useNativeDriver: true,
+            tension: 150,
+            friction: 8,
+        }).start();
     };
 
     const findItemByPath = (data, path) => {
@@ -187,13 +211,118 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                 </View>
             </ScrollView>
             
-            <TouchableOpacity onPress={() => setShowFilterModal(true)} style={[AppStyles.filterFab, { bottom: 138 }]}>
-                <Filter color={colors.blue600} size={24} />
-            </TouchableOpacity>
+            {/* FAB Menu Overlay */}
+            {fabMenuOpen && (
+                <TouchableOpacity 
+                    style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        backgroundColor: 'rgba(0,0,0,0.3)',
+                    }}
+                    onPress={closeFabMenu}
+                    activeOpacity={1}
+                />
+            )}
             
-            <TouchableOpacity onPress={() => setShowFormulePickerModal(true)} style={[AppStyles.filterFab, { bottom: 84 }]}>
-                <Calculator color={colors.blue600} size={24} />
-            </TouchableOpacity>
+            {/* Filter Button */}
+            <Animated.View
+                style={[
+                    AppStyles.filterFab,
+                    { 
+                        bottom: 200,
+                        transform: [
+                            {
+                                translateY: fabMenuAnimation.interpolate({
+                                    inputRange: [0, 1],
+                                    outputRange: [171, 0],
+                                })
+                            },
+                            {
+                                scale: fabMenuAnimation.interpolate({
+                                    inputRange: [0, 1],
+                                    outputRange: [0, 1],
+                                })
+                            }
+                        ],
+                        opacity: fabMenuAnimation
+                    }
+                ]}
+                pointerEvents={fabMenuOpen ? 'auto' : 'none'}
+            >
+                <TouchableOpacity 
+                    onPress={() => {
+                        closeFabMenu();
+                        setShowFilterModal(true);
+                    }} 
+                    style={{ width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' }}
+                >
+                    <Filter color={colors.blue600} size={24} />
+                </TouchableOpacity>
+            </Animated.View>
+            
+            {/* Formula Button */}
+            <Animated.View
+                style={[
+                    AppStyles.filterFab,
+                    { 
+                        bottom: 143,
+                        transform: [
+                            {
+                                translateY: fabMenuAnimation.interpolate({
+                                    inputRange: [0, 1],
+                                    outputRange: [114, 0],
+                                })
+                            },
+                            {
+                                scale: fabMenuAnimation.interpolate({
+                                    inputRange: [0, 1],
+                                    outputRange: [0, 1],
+                                })
+                            }
+                        ],
+                        opacity: fabMenuAnimation
+                    }
+                ]}
+                pointerEvents={fabMenuOpen ? 'auto' : 'none'}
+            >
+                <TouchableOpacity 
+                    onPress={() => {
+                        closeFabMenu();
+                        setShowFormulePickerModal(true);
+                    }} 
+                    style={{ width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' }}
+                >
+                    <Calculator color={colors.blue600} size={24} />
+                </TouchableOpacity>
+            </Animated.View>
+
+            {/* Main Menu FAB */}
+            <Animated.View
+                style={[
+                    AppStyles.filterFab,
+                    { 
+                        bottom: 86,
+                        transform: [
+                            {
+                                rotate: fabMenuAnimation.interpolate({
+                                    inputRange: [0, 1],
+                                    outputRange: ['0deg', '45deg'],
+                                })
+                            }
+                        ]
+                    }
+                ]}
+            >
+                <TouchableOpacity 
+                    onPress={toggleFabMenu}
+                    style={{ width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' }}
+                >
+                    <Menu color={colors.blue600} size={24} />
+                </TouchableOpacity>
+            </Animated.View>
 
             <TouchableOpacity onPress={() => setShowAddObjectModal(true)} style={AppStyles.fab}>
                 <Plus color="white" size={24} />
