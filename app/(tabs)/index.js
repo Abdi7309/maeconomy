@@ -173,6 +173,22 @@ const App = () => {
         return success;
     };
 
+    // Global formule save handler with auto-refresh
+    const handleFormuleSaved = (formuleData) => {
+        // Check if this is a refresh trigger
+        if (formuleData && formuleData.__refresh) {
+            onRefresh();
+            return;
+        }
+        
+        // If a formule was edited and properties were recalculated, refresh the app
+        if (formuleData && formuleData.__edited) {
+            setTimeout(() => {
+                onRefresh();
+            }, 1000); // Small delay to ensure backend processing is complete
+        }
+    };
+
     const findItemByPath = (data, path) => {
         let currentItems = data;
         let foundItem = null;
@@ -231,6 +247,7 @@ const App = () => {
                 setFilterOption={setFilterOption}
                 onAddObject={handleAddObject}
                 objectsHierarchy={objectsHierarchy}
+                onFormuleSaved={handleFormuleSaved}
             />
         );
 
@@ -259,6 +276,8 @@ const App = () => {
                         onSave={handleAddProperties}
                         onUpdate={handleUpdateProperty}
                         onTemplateAdded={handleFetchTemplates}
+                        onRefresh={onRefresh}
+                        onFormuleSaved={handleFormuleSaved}
                         findItemByPath={findItemByPath}
                     />
                 );

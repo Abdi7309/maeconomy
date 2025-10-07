@@ -114,6 +114,19 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
     const [editedUnit, setEditedUnit] = useState(property?.eenheid || '');
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
+    const handleUnitChange = (newUnit) => {
+        const currentUnit = editedUnit;
+        const currentValue = parseFloat(editedValue);
+        
+        // Only convert if we have a valid numeric value and both units are valid
+        if (!isNaN(currentValue) && currentUnit && newUnit && currentUnit !== newUnit) {
+            const convertedValue = convertToUnit(currentValue, currentUnit, newUnit);
+            setEditedValue(convertedValue.toString());
+        }
+        
+        setEditedUnit(newUnit);
+    };
+
     useEffect(() => {
         if (visible) {
             setEditedName(property?.name || '');
@@ -176,7 +189,6 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
         const payload = {
             name: editedName.trim() || property.name,
             waarde: String(roundToDecimals(waardeToSend)), // Ensure it's a rounded string
-            raw_Formule: isFormule ? editedFormule : '',
             Formule_id: property?.Formule_id || null,
             eenheid: editedUnit || '',
         };
@@ -187,11 +199,11 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
             onSaved({
                 name: payload.name,
                 waarde: payload.waarde,
-                formule: payload.raw_Formule, // Pass back the raw Formule for consistency
+                formule: isFormule ? editedFormule : '', // Pass back the formule expression for consistency
                 eenheid: payload.eenheid,
                 // Pass back other relevant fields from the original property if needed
                 Formule_id: property.Formule_id,
-                Formule_expression: payload.raw_Formule,
+                Formule_expression: isFormule ? editedFormule : '',
             });
             onClose();
         }
@@ -276,12 +288,25 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
                     />
 
                     <Text style={[AppStyles.formLabel, { marginTop: 12 }]}>Eenheid</Text>
-                    <TextInput
-                        placeholder="m/cm/mm/kg/g/L/mL"
-                        value={editedUnit}
-                        onChangeText={setEditedUnit}
-                        style={AppStyles.formInput}
-                    />
+                    <View style={styles.unitPickerContainer}>
+                        {['Geen', 'm', 'cm', 'mm', 'kg', 'g', 'L', 'mL'].map((unit) => (
+                            <TouchableOpacity
+                                key={unit}
+                                style={[
+                                    styles.unitButton,
+                                    (editedUnit === unit || (unit === 'Geen' && !editedUnit)) && styles.unitButtonSelected
+                                ]}
+                                onPress={() => handleUnitChange(unit === 'Geen' ? '' : unit)}
+                            >
+                                <Text style={[
+                                    styles.unitButtonText,
+                                    (editedUnit === unit || (unit === 'Geen' && !editedUnit)) && styles.unitButtonTextSelected
+                                ]}>
+                                    {unit}
+                                </Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
 
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 16 }}>
                         <TouchableOpacity onPress={handleDelete} style={{ paddingVertical: 10, paddingHorizontal: 14, backgroundColor: colors.red600, borderRadius: 8 }}>
@@ -387,6 +412,38 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
         </Modal>
         </>
     );
+};
+
+const styles = {
+    unitPickerContainer: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 8,
+        marginTop: 4,
+    },
+    unitButton: {
+        paddingVertical: 8,
+        paddingHorizontal: 16,
+        borderRadius: 20,
+        borderWidth: 1.5,
+        borderColor: colors.lightGray300,
+        backgroundColor: colors.white,
+        minWidth: 50,
+        alignItems: 'center',
+    },
+    unitButtonSelected: {
+        borderColor: colors.blue600,
+        backgroundColor: colors.blue50,
+    },
+    unitButtonText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: colors.lightGray700,
+    },
+    unitButtonTextSelected: {
+        color: colors.blue700,
+        fontWeight: '600',
+    },
 };
 
 export default EditPropertyModal; 

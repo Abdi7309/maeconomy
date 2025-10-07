@@ -1,9 +1,12 @@
-import { ChevronRight, Filter, LogOut, Plus } from 'lucide-react-native';
-import { useState } from 'react';
+import { Calculator, ChevronRight, Filter, LogOut, Plus } from 'lucide-react-native';
+import { useEffect, useState } from 'react';
 import { RefreshControl, ScrollView, StatusBar, Text, TouchableOpacity, View } from 'react-native';
+import { fetchFormules as fetchFormulesApi } from '../api';
 import AppStyles, { colors } from '../AppStyles';
+import AddFormuleModal from '../components/modals/AddFormuleModal';
 import AddObjectModal from '../components/modals/AddObjectModal';
 import FilterModal from '../components/modals/FilterModal';
+import FormulePickerModal from '../components/modals/FormulePickerModal';
 
 const PropertyButton = ({ onClick }) => (
     <TouchableOpacity onPress={onClick} style={{ paddingVertical: 6, paddingHorizontal: 8 }}>
@@ -11,9 +14,70 @@ const PropertyButton = ({ onClick }) => (
     </TouchableOpacity>
 );
 
-const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, setCurrentScreen, setSelectedProperty, handleLogout, onRefresh, refreshing, allUsers, userToken, totalObjectCount, filterOption, setFilterOption, onAddObject, objectsHierarchy }) => {
+const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, setCurrentScreen, setSelectedProperty, handleLogout, onRefresh, refreshing, allUsers, userToken, totalObjectCount, filterOption, setFilterOption, onAddObject, objectsHierarchy, onFormuleSaved }) => {
     const [showAddObjectModal, setShowAddObjectModal] = useState(false);
     const [showFilterModal, setShowFilterModal] = useState(false);
+    const [Formules, setFormules] = useState([]);
+    const [showAddFormuleModal, setShowAddFormuleModal] = useState(false);
+    const [showFormulePickerModal, setShowFormulePickerModal] = useState(false);
+    const [editingFormule, setEditingFormule] = useState(null);
+
+    // Fetch Formules on component mount
+    useEffect(() => {
+        (async () => {
+            try {
+                const FormulesData = await fetchFormulesApi();
+                setFormules(Array.isArray(FormulesData) ? FormulesData : []);
+            } catch (error) {
+                console.error('Error fetching Formules (mount):', error);
+                setFormules([]);
+            }
+        })();
+    }, []);
+
+    useEffect(() => {
+        if (showFormulePickerModal) {
+            (async () => {
+                try {
+                    const FormulesData = await fetchFormulesApi();
+                    setFormules(Array.isArray(FormulesData) ? FormulesData : []);
+                } catch (e) {
+                    console.error('Error refreshing Formules on open:', e);
+                }
+            })();
+        }
+    }, [showFormulePickerModal]);
+
+    const handleFormuleSaved = (newFormule) => {
+        // Use the global formule handler if provided, otherwise use local logic
+        if (onFormuleSaved) {
+            onFormuleSaved(newFormule);
+        } else {
+            // Fallback to local logic if no global handler
+            if (newFormule && newFormule.__refresh) {
+                if (onRefresh) {
+                    onRefresh();
+                }
+                return;
+            }
+            
+            if (newFormule && newFormule.__edited) {
+                setTimeout(() => {
+                    if (onRefresh) {
+                        onRefresh();
+                    }
+                }, 1000);
+            }
+        }
+        
+        // Always update local formules list
+        setFormules(prev => [...prev, newFormule]);
+    };
+
+    const handleFormuleSelected = (Formule) => {
+        // For now, just close the modal - could be extended to do something with the selected formula
+        console.log('Formula selected:', Formule);
+    };
 
     const findItemByPath = (data, path) => {
         let currentItems = data;
@@ -123,8 +187,12 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                 </View>
             </ScrollView>
             
-            <TouchableOpacity onPress={() => setShowFilterModal(true)} style={AppStyles.filterFab}>
+            <TouchableOpacity onPress={() => setShowFilterModal(true)} style={[AppStyles.filterFab, { bottom: 138 }]}>
                 <Filter color={colors.blue600} size={24} />
+            </TouchableOpacity>
+            
+            <TouchableOpacity onPress={() => setShowFormulePickerModal(true)} style={[AppStyles.filterFab, { bottom: 84 }]}>
+                <Calculator color={colors.blue600} size={24} />
             </TouchableOpacity>
 
             <TouchableOpacity onPress={() => setShowAddObjectModal(true)} style={AppStyles.fab}>
@@ -133,6 +201,64 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
 
             {showAddObjectModal && <AddObjectModal visible={showAddObjectModal} onClose={() => setShowAddObjectModal(false)} onSave={(name) => onAddObject(currentLevelPath, { name })} />}
             {showFilterModal && <FilterModal visible={showFilterModal} onClose={() => setShowFilterModal(false)} allUsers={allUsers} userToken={userToken} totalObjectCount={totalObjectCount} onSelectFilter={setFilterOption} />}
+            
+            <AddFormuleModal
+                visible={showAddFormuleModal}
+                onClose={() => {
+                    const wasEditing = !!editingFormule;
+                    setShowAddFormuleModal(false);
+                    setEditingFormule(null);
+                    // If user was editing and chose Annuleer, return to Formule picker
+                    if (wasEditing) {
+                        setTimeout(() => setShowFormulePickerModal(true), 0);
+                    }
+                }}
+                onSave={handleFormuleSaved}
+                editingFormule={editingFormule}
+                onDelete={(deleted) => {
+                    console.log('[HierarchicalObjectsScreen] onDelete callback called with:', deleted);
+                    if (deleted.__deleted) {
+                        console.log('[HierarchicalObjectsScreen] Processing delete for id:', deleted.id);
+                        setFormules(prev => {
+                            const filtered = prev.filter(f => f.id !== deleted.id);
+                            console.log('[HierarchicalObjectsScreen] Formules before filter:', prev.length, 'after filter:', filtered.length);
+                            return filtered;
+                        });
+                        // Refetch from backend to ensure sync (in case of race conditions)
+                        (async () => {
+                            try {
+                                console.log('[HierarchicalObjectsScreen] Refetching Formules from API');
+                                const fresh = await fetchFormulesApi();
+                                if (Array.isArray(fresh)) {
+                                    console.log('[HierarchicalObjectsScreen] Refetch successful, got', fresh.length, 'Formules');
+                                    setFormules(fresh);
+                                } else {
+                                    console.log('[HierarchicalObjectsScreen] Refetch returned non-array:', fresh);
+                                }
+                            } catch (e) {
+                                console.log('[HierarchicalObjectsScreen] Refetch after delete failed', e);
+                            }
+                        })();
+                    } else {
+                        console.log('[HierarchicalObjectsScreen] Delete callback called but __deleted flag is false');
+                    }
+                }}
+            />
+            <FormulePickerModal
+                visible={showFormulePickerModal}
+                onClose={() => setShowFormulePickerModal(false)}
+                Formules={Formules}
+                onSelectFormule={handleFormuleSelected}
+                onEditFormule={(Formule) => {
+                    setShowFormulePickerModal(false);
+                    setEditingFormule(Formule);
+                    setTimeout(() => setShowAddFormuleModal(true), 0);
+                }}
+                onAddFormule={() => {
+                    setShowFormulePickerModal(false);
+                    setTimeout(() => setShowAddFormuleModal(true), 0);
+                }}
+            />
 
         </View>
     );

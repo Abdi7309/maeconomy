@@ -29,7 +29,24 @@ const AddFormuleModal = ({ visible, onClose, onSave, editingFormule = null, onDe
                 onSave({ id, name: FormuleName, Formule: FormuleExpression, __edited: isEditing });
                 setFormuleName('');
                 setFormuleExpression('');
-                Alert.alert('Succes', isEditing ? 'Formule bijgewerkt.' : 'Formule aangemaakt.');
+                
+                // Show special message for updates with recalculated properties
+                if (isEditing && result.affected_properties > 0) {
+                    Alert.alert(
+                        'Formule Bijgewerkt!', 
+                        `✅ ${result.recalculated} eigenschappen automatisch herberekend\n❌ ${result.failed} mislukt\n\nDe app wordt nu vernieuwd.`,
+                        [{ 
+                            text: 'OK', 
+                            onPress: () => {
+                                // Trigger a page refresh by calling onSave again with refresh flag
+                                if (onSave) onSave({ __refresh: true });
+                            }
+                        }]
+                    );
+                } else {
+                    Alert.alert('Succes', isEditing ? 'Formule bijgewerkt.' : 'Formule aangemaakt.');
+                }
+                
                 onClose();
             } else {
                 console.error('Error saving Formule:', result.message);

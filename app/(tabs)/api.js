@@ -153,10 +153,9 @@ export const addProperties = async (objectId, properties) => {
             formData.append('object_id', objectId);
             formData.append('name', prop.name.trim());
 
-            // The `waarde` and `raw_Formule` are now correctly pre-calculated 
-            // in AddPropertyScreen.js. We just need to send them.
+            // The `waarde` is now correctly pre-calculated 
+            // in AddPropertyScreen.js. We just need to send it.
             formData.append('waarde', prop.waarde);
-            formData.append('raw_Formule', prop.raw_Formule || '');
             
             formData.append('Formule_id', prop.Formule_id || '');
             formData.append('eenheid', prop.unit || '');
@@ -186,7 +185,7 @@ export const addProperties = async (objectId, properties) => {
     }
 };
 
-export const updateProperty = async (propertyId, { name, waarde, raw_Formule, Formule_id, eenheid }) => {
+export const updateProperty = async (propertyId, { name, waarde, Formule_id, eenheid }) => {
     try {
         const response = await fetch(`${CONFIG.API_BASE_URL}?entity=properties&id=${propertyId}`, {
             method: 'PUT',
@@ -194,7 +193,6 @@ export const updateProperty = async (propertyId, { name, waarde, raw_Formule, Fo
             body: JSON.stringify({ 
                 name, 
                 waarde, 
-                raw_Formule: raw_Formule || '',
                 Formule_id: Formule_id || '', 
                 eenheid: eenheid || '' 
             }),
@@ -263,7 +261,14 @@ export const updateFormule = async (id, name, Formule) => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, Formule }),
         });
-        return await response.json();
+        const result = await response.json();
+        
+        // Log the recalculation results for debugging
+        if (result.success && result.affected_properties > 0) {
+            console.log(`✅ Formule updated: ${result.affected_properties} properties affected, ${result.recalculated} recalculated, ${result.failed} failed`);
+        }
+        
+        return result;
     } catch (error) {
         console.error('Error updating Formule:', error);
         return { success: false, message: 'Failed to update Formule' };

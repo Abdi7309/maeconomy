@@ -222,7 +222,7 @@ function fetchItemWithHierarchy($pdo, $id) {
     }
 
     // Fetch properties for the current object (using 'eigenschappen' table)
-    $stmt_prop = $pdo->prepare("SELECT e.id, e.object_id, e.name, e.waarde, e.eenheid, e.Formule_id, e.created_at, e.updated_at, f.name as Formule_name, f.Formule as Formule_expression FROM eigenschappen e LEFT JOIN Formules f ON e.Formule_id = f.id WHERE e.object_id = ? ORDER BY e.created_at ASC, e.id ASC");
+                    $stmt_prop = $pdo->prepare("SELECT e.id, e.object_id, e.name, e.waarde, e.eenheid, e.Formule_id, e.created_at, e.updated_at, f.name as Formule_name, f.Formule as Formule_expression FROM eigenschappen e LEFT JOIN Formules f ON e.Formule_id = f.id WHERE e.object_id = ? ORDER BY e.created_at ASC, e.id ASC");
     $stmt_prop->execute([$item['id']]);
     $properties = $stmt_prop->fetchAll();
 
@@ -506,7 +506,7 @@ switch ($entity) {
                 $object_id = $_POST['object_id'];
                 $name = $_POST['name'];
                 $waarde = $_POST['waarde'] ?? '';
-                $raw_Formule = $_POST['raw_Formule'] ?? '';
+
                 $Formule_id = $_POST['Formule_id'] ?? null;
                 // Convert empty string to null for foreign key constraint
                 if ($Formule_id === '' || $Formule_id === 'null') {
@@ -524,7 +524,7 @@ switch ($entity) {
                     error_log("[PROPERTY POST] detect operators=" . ($hasOperators?1:0) . " letters=" . ($hasLetters?1:0));
 
                     // Use broader candidate detection so even pure numeric expressions like 2*3 are treated as Formules
-                    $candidateExpr = $raw_Formule !== '' ? $raw_Formule : $original_input_waarde;
+                    $candidateExpr = $original_input_waarde;
                     if ($candidateExpr !== '' && isFormuleCandidate($candidateExpr)) {
                         $expr = trim($candidateExpr);
                         try {
@@ -534,18 +534,15 @@ switch ($entity) {
                             error_log("[PROPERTY POST] ERROR inserting Formule expr='$expr' msg=" . $fe->getMessage());
                             throw $fe; // abort transaction
                         }
-                        if ($raw_Formule !== '' && $original_input_waarde !== '' && is_numeric($original_input_waarde)) {
-                            $waarde = $original_input_waarde; // trust client preview numeric
-                            error_log("[PROPERTY POST] using client preview value='$waarde'");
+                        {
+                        $calculatedValue = evaluateFormule($pdo, $expr, $object_id);
+                        if ($calculatedValue !== null) {
+                            $waarde = (string)$calculatedValue;
+                            error_log("[PROPERTY POST] evaluation success result='$waarde'");
                         } else {
-                            $calculatedValue = evaluateFormule($pdo, $expr, $object_id);
-                            if ($calculatedValue !== null) {
-                                $waarde = (string)$calculatedValue;
-                                error_log("[PROPERTY POST] evaluation success result='$waarde'");
-                            } else {
-                                $waarde = '';
-                                error_log("[PROPERTY POST] evaluation failed; storing empty waarde");
-                            }
+                            $waarde = '';
+                            error_log("[PROPERTY POST] evaluation failed; storing empty waarde");
+                        }
                         }
                     } else {
                         error_log("[PROPERTY POST] not a Formule candidate – storing raw value");
@@ -623,7 +620,6 @@ switch ($entity) {
                 }
                 
                 $incoming_waarde = $input['waarde'];
-                $raw_Formule = $input['raw_Formule'] ?? '';
                 $Formule_id = $input['Formule_id'] ?? null;
                 // Convert empty string to null for foreign key constraint
                 if ($Formule_id === '' || $Formule_id === 'null') {
@@ -646,7 +642,7 @@ switch ($entity) {
                 
                 error_log("[PROPERTY PUT] id=$id raw_waarde='$incoming_waarde'");
                 $computed_waarde = $incoming_waarde;
-                $candidateExpr = $raw_Formule !== '' ? $raw_Formule : $incoming_waarde;
+                $candidateExpr = $incoming_waarde;
                 if ($candidateExpr !== '' && isFormuleCandidate($candidateExpr)) {
                     $expr = trim($candidateExpr);
                     try {
@@ -658,18 +654,15 @@ switch ($entity) {
                         echo json_encode(["message" => "Failed to update property: Formule error"]);
                         break;
                     }
-                    if ($raw_Formule !== '' && $incoming_waarde !== '' && is_numeric($incoming_waarde)) {
-                        $computed_waarde = $incoming_waarde; // client preview numeric
-                        error_log("[PROPERTY PUT] using client preview value='$computed_waarde'");
+                    {
+                    $calc = evaluateFormule($pdo, $expr, $object_id);
+                    if ($calc !== null) {
+                        $computed_waarde = (string)$calc;
+                        error_log("[PROPERTY PUT] evaluation success result='$computed_waarde'");
                     } else {
-                        $calc = evaluateFormule($pdo, $expr, $object_id);
-                        if ($calc !== null) {
-                            $computed_waarde = (string)$calc;
-                            error_log("[PROPERTY PUT] evaluation success result='$computed_waarde'");
-                        } else {
-                            $computed_waarde = '';
-                            error_log("[PROPERTY PUT] evaluation failed; storing empty waarde");
-                        }
+                        $computed_waarde = '';
+                        error_log("[PROPERTY PUT] evaluation failed; storing empty waarde");
+                    }
                     }
                 } else {
                     error_log("[PROPERTY PUT] not a Formule candidate – storing raw value");
@@ -839,13 +832,62 @@ switch ($entity) {
                     break;
                 }
                 
-                $stmt = $pdo->prepare("UPDATE Formules SET name = ?, Formule = ?, updated_at = NOW() WHERE id = ?");
-                if ($stmt->execute([$input['name'], $input['Formule'], $id])) {
+                $pdo->beginTransaction();
+                try {
+                    // Update the formule
+                    $stmt = $pdo->prepare("UPDATE Formules SET name = ?, Formule = ?, updated_at = NOW() WHERE id = ?");
+                    if (!$stmt->execute([$input['name'], $input['Formule'], $id])) {
+                        throw new Exception("Failed to update formule");
+                    }
+                    
+                    // Find all properties that use this formule and recalculate them
+                    $stmt_props = $pdo->prepare("SELECT e.id, e.object_id, e.name FROM eigenschappen e WHERE e.Formule_id = ?");
+                    $stmt_props->execute([$id]);
+                    $affected_properties = $stmt_props->fetchAll();
+                    
+                    $recalculated_count = 0;
+                    $failed_count = 0;
+                    
+                    foreach ($affected_properties as $prop) {
+                        try {
+                            // Recalculate the property value using the updated formule
+                            $new_value = evaluateFormule($pdo, $input['Formule'], $prop['object_id']);
+                            
+                            if ($new_value !== null) {
+                                // Update the property with the new calculated value
+                                $update_stmt = $pdo->prepare("UPDATE eigenschappen SET waarde = ?, updated_at = NOW() WHERE id = ?");
+                                $update_stmt->execute([(string)$new_value, $prop['id']]);
+                                $recalculated_count++;
+                                error_log("[FORMULE UPDATE] Recalculated property id={$prop['id']} name='{$prop['name']}' new_value='{$new_value}'");
+                            } else {
+                                // If evaluation failed, set empty value
+                                $update_stmt = $pdo->prepare("UPDATE eigenschappen SET waarde = '', updated_at = NOW() WHERE id = ?");
+                                $update_stmt->execute([$prop['id']]);
+                                $failed_count++;
+                                error_log("[FORMULE UPDATE] Failed to evaluate property id={$prop['id']} name='{$prop['name']}'");
+                            }
+                        } catch (Exception $prop_error) {
+                            $failed_count++;
+                            error_log("[FORMULE UPDATE] Error updating property id={$prop['id']}: " . $prop_error->getMessage());
+                        }
+                    }
+                    
+                    $pdo->commit();
                     http_response_code(200);
-                    echo json_encode(["message" => "Formule updated successfully.", "id" => $id, "success" => true]);
-                } else {
+                    echo json_encode([
+                        "message" => "Formule updated successfully.", 
+                        "id" => $id, 
+                        "success" => true,
+                        "affected_properties" => count($affected_properties),
+                        "recalculated" => $recalculated_count,
+                        "failed" => $failed_count
+                    ]);
+                    
+                } catch (Exception $e) {
+                    $pdo->rollBack();
+                    error_log("Formule update failed: " . $e->getMessage());
                     http_response_code(500);
-                    echo json_encode(["message" => "Failed to update Formule.", "success" => false]);
+                    echo json_encode(["message" => "Failed to update Formule: " . $e->getMessage(), "success" => false]);
                 }
                 break;
 
