@@ -2,7 +2,7 @@ import { ChevronLeft, File, FileImage, FileText, Paperclip, Plus, Tag, X } from 
 import { useState } from 'react';
 import { Image, Linking, Modal, RefreshControl, ScrollView, StatusBar, Text, TouchableOpacity, View } from 'react-native';
 import AppStyles, { colors } from '../AppStyles';
-import CONFIG from '../config/config';
+import { supabase } from '../config/config';
 
 const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onRefresh, refreshing }) => {
     
@@ -51,9 +51,12 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
 
     // --- NEW: Function to handle opening a file ---
     const handleOpenFile = (file) => {
-        const apiUrl = CONFIG.API_BASE_URL;
-        const baseApiUrl = apiUrl.substring(0, apiUrl.lastIndexOf('/'));
-        const fileUrl = `${baseApiUrl}/${file.file_path}`;
+        // Get public URL from Supabase Storage
+        const { data } = supabase.storage
+            .from('property-files')
+            .getPublicUrl(file.file_path);
+        
+        const fileUrl = data.publicUrl;
 
         if (file.file_type && file.file_type.startsWith('image/')) {
             // If it's an image, open it in the modal

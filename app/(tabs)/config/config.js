@@ -1,6 +1,15 @@
+import { createClient } from '@supabase/supabase-js';
+
+// Supabase project configuration
+const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://lasqujeicadwlfdmvgrx.supabase.co'
+const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'your-anon-key'
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+
 const CONFIG = {
-    API_BASE_URL: 'http://10.3.1.34/Maeconomy/app/(tabs)/api.php',
-    // Add other configuration settings as needed
+    // Keep for any other non-API related configurations
+    SUPABASE_URL: supabaseUrl,
+    SUPABASE_ANON_KEY: supabaseAnonKey,
 };
 
 export default CONFIG;

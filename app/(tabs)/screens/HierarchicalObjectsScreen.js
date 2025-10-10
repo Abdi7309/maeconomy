@@ -7,6 +7,7 @@ import AddFormuleModal from '../components/modals/AddFormuleModal';
 import AddObjectModal from '../components/modals/AddObjectModal';
 import FilterModal from '../components/modals/FilterModal';
 import FormulePickerModal from '../components/modals/FormulePickerModal';
+import { supabase } from '../config/config';
 
 const PropertyButton = ({ onClick }) => (
     <TouchableOpacity onPress={onClick} style={{ paddingVertical: 6, paddingHorizontal: 8 }}>
@@ -24,7 +25,7 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
     const [fabMenuOpen, setFabMenuOpen] = useState(false);
     const [fabMenuAnimation] = useState(new Animated.Value(0));
 
-    // Fetch Formules on component mount
+    // Fetch Formules on component mount and set up real-time subscriptions
     useEffect(() => {
         (async () => {
             try {
@@ -35,7 +36,44 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                 setFormules([]);
             }
         })();
-    }, []);
+
+        // Set up real-time subscriptions
+        const objectsSubscription = supabase
+            .channel('objects-channel')
+            .on('postgres_changes', 
+                { event: '*', schema: 'public', table: 'objects' },
+                (payload) => {
+                    console.log('Object change detected:', payload)
+                    if (onRefresh) {
+                        onRefresh() // Trigger a refresh of the objects
+                    }
+                }
+            )
+            .subscribe()
+
+        const formulesSubscription = supabase
+            .channel('formules-channel')
+            .on('postgres_changes',
+                { event: '*', schema: 'public', table: 'formules' },
+                async (payload) => {
+                    console.log('Formula change detected:', payload)
+                    // Refresh formulas list
+                    try {
+                        const FormulesData = await fetchFormulesApi();
+                        setFormules(Array.isArray(FormulesData) ? FormulesData : []);
+                    } catch (error) {
+                        console.error('Error refreshing formulas:', error);
+                    }
+                }
+            )
+            .subscribe()
+
+        // Cleanup subscriptions
+        return () => {
+            objectsSubscription.unsubscribe()
+            formulesSubscription.unsubscribe()
+        }
+    }, [onRefresh]);
 
     useEffect(() => {
         if (showFormulePickerModal) {

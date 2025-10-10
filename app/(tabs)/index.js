@@ -1,4 +1,3 @@
-import AsyncStorage from '@react-native-async-storage/async-storage'; // --- 1. IMPORT ASYNCSTORAGE ---
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, View } from 'react-native';
 import {
@@ -6,12 +5,16 @@ import {
     addProperties as apiAddProperties,
     fetchAndSetAllObjects as apiFetchObjects,
     fetchTemplates as apiFetchTemplates,
-    handleLogin as apiLogin,
-    handleRegister as apiRegister,
+    supabaseLogin as apiLogin,
+    supabaseLogout as apiLogout,
+    supabaseRegister as apiRegister,
     updateProperty as apiUpdateProperty,
-    fetchAllUsers
+    fetchAllUsers,
+    getCurrentSession,
+    getCurrentUser
 } from './api';
 import AppStyles, { colors } from './AppStyles';
+import { supabase } from './config/config';
 import AddPropertyScreen from './screens/AddPropertyScreen';
 import AuthScreen from './screens/AuthScreen';
 import HierarchicalObjectsScreen from './screens/HierarchicalObjectsScreen';
@@ -19,9 +22,11 @@ import PropertiesScreen from './screens/PropertiesScreen';
 
 const App = () => {
     const [userToken, setUserToken] = useState(null);
+    const [currentUser, setCurrentUser] = useState(null);
+    const [session, setSession] = useState(null);
     const [currentView, setCurrentView] = useState('login');
     const [isLoading, setIsLoading] = useState(false);
-    const [isAppLoading, setIsAppLoading] = useState(true); // --- 2. ADD APP LOADING STATE ---
+    const [isAppLoading, setIsAppLoading] = useState(true);
     const [authError, setAuthError] = useState('');
     const [currentScreen, setCurrentScreen] = useState('objects');
     const [selectedProperty, setSelectedProperty] = useState(null);
@@ -33,25 +38,81 @@ const App = () => {
     const [totalObjectCount, setTotalObjectCount] = useState(0);
     const [filterOption, setFilterOption] = useState(null);
 
-    // --- 3. ADD EFFECT TO CHECK STORAGE ON APP START ---
+    // Initialize app state and check for Supabase session
     useEffect(() => {
-        const loadUserFromStorage = async () => {
+        const initializeApp = async () => {
             try {
-                const storedUserToken = await AsyncStorage.getItem('userToken');
-                if (storedUserToken) {
-                    setUserToken(JSON.parse(storedUserToken));
-                    setFilterOption('all'); // Set default filter
-                    await handleFetchUsers(); // Fetch initial data
-                    await handleFetchTemplates();
+                // Get current Supabase session
+                const currentSession = await getCurrentSession();
+                
+                if (currentSession) {
+                    console.log('[initializeApp] Found active Supabase session');
+                    
+                    // Get user data
+                    const userData = await getCurrentUser();
+                    
+                    if (userData && userData.user) {
+                        setSession(currentSession);
+                        setCurrentUser(userData.user);
+                        setUserToken(userData.user.id);
+                        setCurrentView('app');
+                        setFilterOption('all');
+                        console.log('[initializeApp] User authenticated:', userData.user.email);
+                    }
+                } else {
+                    console.log('[initializeApp] No active session found');
                 }
             } catch (error) {
-                console.error("Failed to load user from storage", error);
+                console.error('[initializeApp] Error checking Supabase session:', error);
             } finally {
                 setIsAppLoading(false);
             }
         };
-        loadUserFromStorage();
+        
+        initializeApp();
+
+        // Listen for auth state changes
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(
+            async (event, session) => {
+                console.log('[AuthStateChange] Event:', event, 'Session:', !!session);
+                
+                if (event === 'SIGNED_IN' && session) {
+                    const userData = await getCurrentUser();
+                    if (userData && userData.user) {
+                        setSession(session);
+                        setCurrentUser(userData.user);
+                        setUserToken(userData.user.id);
+                        setCurrentView('app');
+                        setFilterOption('all');
+                    }
+                } else if (event === 'SIGNED_OUT') {
+                    setSession(null);
+                    setCurrentUser(null);
+                    setUserToken(null);
+                    setCurrentView('login');
+                    // Clear app state
+                    setObjectsHierarchy([]);
+                    setAllUsers([]);
+                    setFetchedTemplates({});
+                    setCurrentScreen('objects');
+                    setCurrentPath([]);
+                    setFilterOption(null);
+                }
+            }
+        );
+
+        return () => {
+            subscription?.unsubscribe();
+        };
     }, []);
+
+    // Fetch data when user is logged in
+    useEffect(() => {
+        if (userToken && currentView === 'app') {
+            handleFetchUsers();
+            handleFetchTemplates();
+        }
+    }, [userToken, currentView]);
 
     useEffect(() => {
         if (userToken) {
@@ -63,62 +124,58 @@ const App = () => {
         const data = await fetchAllUsers();
         if (data) {
             setAllUsers(data.users);
-            setTotalObjectCount(data.total_objects);
+            setTotalObjectCount(data.totalObjectCount);
         }
     };
 
-    const handleLogin = async (username, password) => {
+    const handleLogin = async (email, password) => {
         setIsLoading(true);
         setAuthError('');
-        const result = await apiLogin(username, password);
+        const result = await apiLogin(email, password);
         if (result && result.success) {
-            const userId = result.user.id;
-            setUserToken(userId);
-            setFilterOption('all');
-            setCurrentView('app');
-            await handleFetchUsers();
-            await handleFetchTemplates();
-
-            // --- 4. SAVE USER TOKEN ON LOGIN ---
-            try {
-                await AsyncStorage.setItem('userToken', JSON.stringify(userId));
-            } catch (error) {
-                console.error("Failed to save user token to storage", error);
-            }
-
+            // Supabase Auth will handle session management automatically
+            // The auth state change listener will update our state
+            console.log('[handleLogin] Login successful for:', email);
         } else {
             setAuthError(result ? result.message : 'An error occurred during login.');
         }
         setIsLoading(false);
     };
     
-    const handleRegister = async (username, password) => {
+    const handleRegister = async (email, password, username) => {
         setIsLoading(true);
         setAuthError('');
-        const result = await apiRegister(username, password);
+        const result = await apiRegister(email, password, username);
         if (result && result.success) {
-            Alert.alert('Registration Successful', 'You can now log in.');
-            setCurrentView('login');
+            if (result.needsConfirmation) {
+                Alert.alert(
+                    'Check Your Email', 
+                    'We sent you a confirmation link. Please check your email and click the link to confirm your account.',
+                    [{ text: 'OK', onPress: () => setCurrentView('login') }]
+                );
+            } else {
+                Alert.alert('Registration Successful', 'Account created successfully!');
+                // Auth state change will handle the login automatically
+            }
         } else {
             setAuthError(result ? result.message : 'An error occurred during registration.');
         }
         setIsLoading(false);
     };
 
-    const handleLogout = async () => { // --- 5. MAKE LOGOUT ASYNC ---
-        setUserToken(null);
-        setCurrentView('login');
-        setObjectsHierarchy([]);
-        setCurrentPath([]);
-        setAllUsers([]);
-        setFilterOption(null);
-        setTotalObjectCount(0);
-
-        // --- 6. CLEAR USER TOKEN ON LOGOUT ---
+    const handleLogout = async () => {
         try {
-            await AsyncStorage.removeItem('userToken');
+            const success = await apiLogout();
+            if (success) {
+                console.log('[handleLogout] Logout successful');
+                // Auth state change listener will handle state cleanup
+            } else {
+                console.error('[handleLogout] Logout failed');
+                Alert.alert('Error', 'Failed to logout. Please try again.');
+            }
         } catch (error) {
-            console.error("Failed to remove user token from storage", error);
+            console.error('[handleLogout] Error during logout:', error);
+            Alert.alert('Error', 'An error occurred during logout.');
         }
     };
 

@@ -1,9 +1,10 @@
+import { Lock, Mail, User } from 'lucide-react-native';
 import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator, StatusBar } from 'react-native';
-import { User, Lock } from 'lucide-react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, StatusBar, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import AppStyles, { colors } from '../AppStyles';
 
 const AuthScreen = ({ onLogin, onRegister, authError, setAuthError, isLoading, currentView, setCurrentView }) => {
+    const [email, setEmail] = useState('');
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
 
@@ -19,20 +20,39 @@ const AuthScreen = ({ onLogin, onRegister, authError, setAuthError, isLoading, c
                 </Text>
 
                 <View style={AppStyles.formGroup}>
-                    <Text style={AppStyles.formLabel}>Username</Text>
+                    <Text style={AppStyles.formLabel}>Email</Text>
                     <View style={AppStyles.authInputContainer}>
-                        <User style={AppStyles.authInputIcon} color={colors.lightGray400} size={20} />
+                        <Mail style={AppStyles.authInputIcon} color={colors.lightGray400} size={20} />
                         <TextInput
                             style={[AppStyles.formInput, AppStyles.authInput]}
-                            placeholder="Enter your username"
-                            value={username}
-                            onChangeText={setUsername}
+                            placeholder="Enter your email"
+                            value={email}
+                            onChangeText={setEmail}
                             onFocus={() => setAuthError('')}
                             autoCapitalize="none"
+                            keyboardType="email-address"
                             placeholderTextColor={colors.lightGray400}
                         />
                     </View>
                 </View>
+
+                {currentView === 'register' && (
+                    <View style={AppStyles.formGroup}>
+                        <Text style={AppStyles.formLabel}>Username</Text>
+                        <View style={AppStyles.authInputContainer}>
+                            <User style={AppStyles.authInputIcon} color={colors.lightGray400} size={20} />
+                            <TextInput
+                                style={[AppStyles.formInput, AppStyles.authInput]}
+                                placeholder="Choose a username"
+                                value={username}
+                                onChangeText={setUsername}
+                                onFocus={() => setAuthError('')}
+                                autoCapitalize="none"
+                                placeholderTextColor={colors.lightGray400}
+                            />
+                        </View>
+                    </View>
+                )}
 
                 <View style={AppStyles.formGroup}>
                     <Text style={AppStyles.formLabel}>Password</Text>
@@ -58,7 +78,7 @@ const AuthScreen = ({ onLogin, onRegister, authError, setAuthError, isLoading, c
 
                 <TouchableOpacity
                     style={[AppStyles.btnPrimary, AppStyles.btnFull, { marginTop: 16 }]}
-                    onPress={() => currentView === 'login' ? onLogin(username, password) : onRegister(username, password)}
+                    onPress={() => currentView === 'login' ? onLogin(email, password) : onRegister(email, password, username)}
                     disabled={isLoading}
                 >
                     {isLoading ? (

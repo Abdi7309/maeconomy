@@ -36,7 +36,7 @@ const FormulePickerModal = ({ visible, onClose, Formules = [], onSelectFormule, 
                                     Beschikbare Formules ({FormulesList.length})
                                 </Text>
                                 {FormulesList.map((Formule) => (
-                                    <View
+                                    <TouchableOpacity
                                         key={Formule.id}
                                         style={[
                                             AppStyles.filterOption,
@@ -51,6 +51,12 @@ const FormulePickerModal = ({ visible, onClose, Formules = [], onSelectFormule, 
                                                 borderColor: colors.lightGray200,
                                             }
                                         ]}
+                                        onPress={() => {
+                                            if (onSelectFormule) {
+                                                onSelectFormule(Formule);
+                                                onClose();
+                                            }
+                                        }}
                                     >
                                         <Calculator size={20} color={colors.blue600} />
                                         <View style={{ marginLeft: 16, flex: 1 }}>
@@ -58,7 +64,7 @@ const FormulePickerModal = ({ visible, onClose, Formules = [], onSelectFormule, 
                                                 {Formule.name}
                                             </Text>
                                             <Text style={[AppStyles.infoText, { marginTop: 4, color: colors.lightGray600, fontSize: 14 }]}>
-                                                {Formule.Formule}
+                                                {Formule.formule}
                                             </Text>
                                         </View>
                                         {onEditFormule && (
@@ -77,7 +83,7 @@ const FormulePickerModal = ({ visible, onClose, Formules = [], onSelectFormule, 
                                                 <Text style={{ color: colors.blue600, fontWeight: '600' }}>Bewerken</Text>
                                             </TouchableOpacity>
                                         )}
-                                    </View>
+                                    </TouchableOpacity>
                                 ))}
                             </View>
                         )}

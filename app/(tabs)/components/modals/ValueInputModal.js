@@ -45,7 +45,9 @@ const ValueInputModal = ({
             // Pass value and unit separately as an object
             onValueSet(manualValue, { unit: selectedUnit, isManual: true });
         } else if (inputMode === 'formule' && selectedFormule) {
-            onValueSet(selectedFormule.Formule, selectedFormule);
+            // Access the correct property name (lowercase 'formule' from database)
+            const formuleExpression = selectedFormule.formule || selectedFormule.Formule || '';
+            onValueSet(formuleExpression, selectedFormule);
         }
         onClose();
     };

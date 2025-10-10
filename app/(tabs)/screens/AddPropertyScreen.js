@@ -59,6 +59,11 @@ const buildPropertiesMap = (properties, outputUnit) => {
 };
 
 const evaluateFormule = (Formule, properties) => {
+    // Check if Formule is valid
+    if (!Formule || typeof Formule !== 'string') {
+        return { value: 0, error: 'Invalid formula' };
+    }
+    
     let expression = Formule;
     
     // Handle both array of properties and properties map
@@ -415,6 +420,8 @@ const AddPropertyScreen = ({ ...props }) => {
             )
         );
     };
+
+
 
     const handleSaveOnBack = async () => {
         const propertiesToSave = newPropertiesList

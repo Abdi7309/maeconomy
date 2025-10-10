@@ -1,10 +1,8 @@
-import { X, Plus } from 'lucide-react-native';
+import { Plus, X } from 'lucide-react-native';
 import { useState } from 'react';
 import { Alert, Dimensions, KeyboardAvoidingView, Modal, Platform, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import AppStyles, { colors } from '../../AppStyles';
-import CONFIG from '../../config/config';
-
-const API_BASE_URL = CONFIG.API_BASE_URL;
+import { createTemplate } from '../../api';
 
 const AddTemplateModal = ({ visible, onClose, onTemplateSaved }) => {
     const [templateName, setTemplateName] = useState('');
@@ -42,28 +40,30 @@ const AddTemplateModal = ({ visible, onClose, onTemplateSaved }) => {
         }
 
         try {
-            const response = await fetch(`${API_BASE_URL}?entity=templates`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    name: templateName.trim(),
-                    properties: validProps.map(p => ({
-                        property_name: p.name.trim(),
-                        property_value: p.value.trim()
-                    })),
-                }),
-            });
-
-            const result = await response.json();
-            if (response.ok) {
+            console.log('[AddTemplateModal] Saving template:', templateName.trim())
+            
+            const properties = validProps.map(p => ({
+                property_name: p.name.trim(),
+                property_value: p.value.trim()
+            }));
+            
+            const result = await createTemplate(templateName.trim(), properties);
+            
+            if (result.success) {
                 Alert.alert('Success', result.message || 'Sjabloon succesvol opgeslagen.');
+                
+                // Reset form
+                setTemplateName('');
+                setTemplateProperties([{ name: '', value: '' }]);
+                
                 onTemplateSaved();
                 onClose();
             } else {
                 setError(result.message || 'Opslaan mislukt.');
             }
         } catch (e) {
-            setError('Netwerkfout bij opslaan.');
+            console.error('[AddTemplateModal] Error saving template:', e);
+            setError('Netwerkfout bij opslaan. Probeer opnieuw.');
         }
     };
 

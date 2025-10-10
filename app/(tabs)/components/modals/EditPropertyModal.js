@@ -67,6 +67,11 @@ const buildPropertiesMap = (properties, outputUnit) => {
 };
 
 const evaluateFormule = (Formule, propertiesMap) => {
+    // Check if Formule is valid
+    if (!Formule || typeof Formule !== 'string') {
+        return { value: 0, error: 'Invalid formula' };
+    }
+    
     let expression = Formule;
     // Replace property names with their numeric values from the map
     Object.keys(propertiesMap).forEach(key => {

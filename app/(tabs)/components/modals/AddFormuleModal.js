@@ -6,13 +6,13 @@ import { createFormule, deleteFormule, updateFormule } from '../../api';
 const AddFormuleModal = ({ visible, onClose, onSave, editingFormule = null, onDelete }) => {
     const isEditing = !!editingFormule;
     const [FormuleName, setFormuleName] = useState(editingFormule?.name || '');
-    const [FormuleExpression, setFormuleExpression] = useState(editingFormule?.Formule || '');
+    const [FormuleExpression, setFormuleExpression] = useState(editingFormule?.formule || '');
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
     useEffect(() => {
         if (visible) {
             setFormuleName(editingFormule?.name || '');
-            setFormuleExpression(editingFormule?.Formule || '');
+            setFormuleExpression(editingFormule?.formule || '');
         }
     }, [visible, editingFormule]);
 
@@ -26,7 +26,7 @@ const AddFormuleModal = ({ visible, onClose, onSave, editingFormule = null, onDe
             }
             if (result && (result.id || result.success)) {
                 const id = result.id || editingFormule.id;
-                onSave({ id, name: FormuleName, Formule: FormuleExpression, __edited: isEditing });
+                onSave({ id, name: FormuleName, formule: FormuleExpression, __edited: isEditing });
                 setFormuleName('');
                 setFormuleExpression('');
                 
