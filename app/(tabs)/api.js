@@ -96,25 +96,24 @@ export const supabaseLogout = async () => {
   try {
     console.log('[supabaseLogout] Starting logout process...');
     
-    // Get current session before logout
-    const { data: { session: currentSession } } = await supabase.auth.getSession();
-    console.log('[supabaseLogout] Current session exists:', !!currentSession);
+    // Add timeout to prevent hanging
+    const logoutPromise = supabase.auth.signOut();
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Logout timeout')), 5000)
+    );
     
-    const { error } = await supabase.auth.signOut();
+    const { error } = await Promise.race([logoutPromise, timeoutPromise]);
     
     if (error) {
       console.error('[supabaseLogout] Supabase logout error:', error);
       return false;
     }
     
-    // Verify logout was successful
-    const { data: { session: afterSession } } = await supabase.auth.getSession();
-    console.log('[supabaseLogout] Session after logout:', !!afterSession);
-    
     console.log('[supabaseLogout] Logout completed successfully');
     return true;
   } catch (error) {
-    console.error('[supabaseLogout] Unexpected logout error:', error);
+    console.error('[supabaseLogout] Logout error or timeout:', error);
+    // Even if logout fails, we'll return false but the UI state will already be cleared
     return false;
   }
 }

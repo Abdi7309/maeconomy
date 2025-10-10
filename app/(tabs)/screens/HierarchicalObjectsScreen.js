@@ -1,6 +1,7 @@
 import { Calculator, ChevronRight, Filter, LogOut, Menu, Plus } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import { Animated, RefreshControl, ScrollView, StatusBar, Text, TouchableOpacity, View } from 'react-native';
+import HierarchicalObjectsSkeletonList from '../../../components/HierarchicalObjectsSkeletonList';
 import { fetchFormules as fetchFormulesApi } from '../api';
 import AppStyles, { colors } from '../AppStyles';
 import AddFormuleModal from '../components/modals/AddFormuleModal';
@@ -15,7 +16,7 @@ const PropertyButton = ({ onClick }) => (
     </TouchableOpacity>
 );
 
-const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, setCurrentScreen, setSelectedProperty, handleLogout, onRefresh, refreshing, allUsers, userToken, totalObjectCount, filterOption, setFilterOption, onAddObject, objectsHierarchy, onFormuleSaved }) => {
+const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, setCurrentScreen, setSelectedProperty, handleLogout, onRefresh, refreshing, allUsers, userToken, totalObjectCount, filterOption, setFilterOption, onAddObject, objectsHierarchy, onFormuleSaved, isLoading }) => {
     const [showAddObjectModal, setShowAddObjectModal] = useState(false);
     const [showFilterModal, setShowFilterModal] = useState(false);
     const [Formules, setFormules] = useState([]);
@@ -216,7 +217,9 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                 refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.blue600]} tintColor={colors.blue600} />}
             >
                 <View style={AppStyles.cardList}>
-                    {items.length > 0 ? (
+                    {isLoading ? (
+                        <HierarchicalObjectsSkeletonList count={6} />
+                    ) : items.length > 0 ? (
                         items.map((item) => (
                             <TouchableOpacity
                                 key={item.id}

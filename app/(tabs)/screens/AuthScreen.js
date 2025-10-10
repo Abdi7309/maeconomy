@@ -11,7 +11,7 @@ const AuthScreen = ({ onLogin, onRegister, authError, setAuthError, isLoading, c
     return (
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={AppStyles.authContainer}>
             <StatusBar barStyle="dark-content" />
-            <View>
+            <View style={AppStyles.authBox}>
                 <Text style={AppStyles.authTitle}>
                     {currentView === 'login' ? 'Welcome Back!' : 'Create Account'}
                 </Text>

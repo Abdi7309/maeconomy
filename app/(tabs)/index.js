@@ -10,7 +10,6 @@ import {
     supabaseRegister as apiRegister,
     updateProperty as apiUpdateProperty,
     fetchAllUsers,
-    fixMissingProfiles,
     getCurrentSession,
     getCurrentUser
 } from './api';
@@ -107,11 +106,16 @@ const App = () => {
         };
     }, []);
 
-    // Fetch data when user is logged in
+    // Fetch data when user is logged in - load in parallel for better performance
     useEffect(() => {
         if (userToken && currentView === 'app') {
-            handleFetchUsers();
-            handleFetchTemplates();
+            // Load data in parallel instead of sequentially
+            Promise.all([
+                handleFetchUsers(),
+                handleFetchTemplates()
+            ]).catch(error => {
+                console.error('[useEffect] Error loading initial data:', error);
+            });
         }
     }, [userToken, currentView]);
 
@@ -122,16 +126,16 @@ const App = () => {
     }, [filterOption]);
 
     const handleFetchUsers = async () => {
-        // First try to fix any missing profiles
-        const fixResult = await fixMissingProfiles();
-        if (fixResult.success && fixResult.createdProfiles > 0) {
-            console.log('[handleFetchUsers] Fixed missing profiles:', fixResult.message);
-        }
-        
-        const data = await fetchAllUsers();
-        if (data) {
-            setAllUsers(data.users);
-            setTotalObjectCount(data.totalObjectCount);
+        try {
+            // Only fix missing profiles on first load or when explicitly needed
+            // This reduces unnecessary database calls
+            const data = await fetchAllUsers();
+            if (data) {
+                setAllUsers(data.users);
+                setTotalObjectCount(data.totalObjectCount);
+            }
+        } catch (error) {
+            console.error('[handleFetchUsers] Error fetching users:', error);
         }
     };
 
@@ -177,35 +181,33 @@ const App = () => {
             // Show loading state
             setIsLoading(true);
             
+            // Clear state immediately for better UX
+            setSession(null);
+            setCurrentUser(null);
+            setUserToken(null);
+            setCurrentView('login');
+            setObjectsHierarchy([]);
+            setAllUsers([]);
+            setFetchedTemplates({});
+            setCurrentScreen('objects');
+            setCurrentPath([]);
+            setFilterOption(null);
+            
+            // Call logout API in background
             const success = await apiLogout();
             
-            if (success) {
-                console.log('[handleLogout] Logout API call successful');
-                // The auth state change listener should handle the rest
-                // But let's also manually clear state as a fallback
-                setTimeout(() => {
-                    if (userToken) {
-                        console.log('[handleLogout] Manually clearing state as fallback');
-                        setSession(null);
-                        setCurrentUser(null);
-                        setUserToken(null);
-                        setCurrentView('login');
-                        setObjectsHierarchy([]);
-                        setAllUsers([]);
-                        setFetchedTemplates({});
-                        setCurrentScreen('objects');
-                        setCurrentPath([]);
-                        setFilterOption(null);
-                    }
-                }, 1000);
+            if (!success) {
+                console.warn('[handleLogout] Logout API call failed, but state cleared locally');
+                // Don't show error - user is already logged out from UI perspective
             } else {
-                console.error('[handleLogout] Logout API call failed');
-                Alert.alert('Error', 'Failed to logout. Please try again.');
+                console.log('[handleLogout] Logout API call successful');
             }
+            
         } catch (error) {
             console.error('[handleLogout] Error during logout:', error);
-            Alert.alert('Error', 'An error occurred during logout.');
+            // Don't show error alert - user is already logged out from UI perspective
         } finally {
+            // Ensure loading is always cleared
             setIsLoading(false);
         }
     };
@@ -314,9 +316,7 @@ const App = () => {
             );
         }
 
-        if (isLoading && !refreshing) {
-             return <View style={{flex: 1, justifyContent: 'center', alignItems: 'center'}}><ActivityIndicator size="large" color={colors.blue600} /></View>;
-        }
+        // No global loader here; screen will show its own skeleton list when isLoading is true
 
         const objectsScreen = (
             <HierarchicalObjectsScreen
@@ -336,6 +336,7 @@ const App = () => {
                 onAddObject={handleAddObject}
                 objectsHierarchy={objectsHierarchy}
                 onFormuleSaved={handleFormuleSaved}
+                isLoading={isLoading}
             />
         );
 

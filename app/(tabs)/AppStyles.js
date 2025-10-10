@@ -442,6 +442,16 @@ const AppStyles = StyleSheet.create({
         paddingHorizontal: 2 * 16,
         backgroundColor: colors.lightGray50,
     },
+    authBox: {
+        maxWidth: 1000,
+        width: '100%',
+        alignSelf: 'center',
+        backgroundColor: colors.white,
+        paddingHorizontal: 2 * 16,
+        paddingVertical: 2.5 * 16,
+        borderRadius: 12,
+        ...shadows.lg,
+    },
     authTitle: {
         fontSize: 2.25 * 16, // 36px
         fontWeight: 'bold',
