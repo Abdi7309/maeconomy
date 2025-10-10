@@ -94,15 +94,28 @@ export const supabaseRegister = async (email, password, username) => {
 
 export const supabaseLogout = async () => {
   try {
-    const { error } = await supabase.auth.signOut()
+    console.log('[supabaseLogout] Starting logout process...');
+    
+    // Get current session before logout
+    const { data: { session: currentSession } } = await supabase.auth.getSession();
+    console.log('[supabaseLogout] Current session exists:', !!currentSession);
+    
+    const { error } = await supabase.auth.signOut();
+    
     if (error) {
-      console.error('Logout error:', error)
-      return false
+      console.error('[supabaseLogout] Supabase logout error:', error);
+      return false;
     }
-    return true
+    
+    // Verify logout was successful
+    const { data: { session: afterSession } } = await supabase.auth.getSession();
+    console.log('[supabaseLogout] Session after logout:', !!afterSession);
+    
+    console.log('[supabaseLogout] Logout completed successfully');
+    return true;
   } catch (error) {
-    console.error('Logout error:', error)
-    return false
+    console.error('[supabaseLogout] Unexpected logout error:', error);
+    return false;
   }
 }
 
@@ -115,13 +128,49 @@ export const getCurrentUser = async () => {
       return null
     }
     
+    console.log('[getCurrentUser] Getting profile for user:', user.id, user.email);
+    
     // Get user profile
-    const { data: profile } = await supabase
+    const { data: profile, error: profileError } = await supabase
       .from('profiles')
       .select('*')
       .eq('id', user.id)
       .single()
     
+    if (profileError && profileError.code === 'PGRST116') {
+      // Profile doesn't exist, try to create it
+      console.log('[getCurrentUser] Profile not found, creating one...');
+      
+      const username = user.user_metadata?.username || 
+                      user.raw_user_meta_data?.username || 
+                      user.email?.split('@')[0] || 
+                      `user_${user.id.substring(0, 8)}`;
+      
+      const { data: newProfile, error: createError } = await supabase
+        .from('profiles')
+        .insert([{
+          id: user.id,
+          username: username,
+          full_name: user.user_metadata?.full_name || user.raw_user_meta_data?.full_name || ''
+        }])
+        .select()
+        .single();
+      
+      if (createError) {
+        console.error('[getCurrentUser] Failed to create profile:', createError);
+        return { user, profile: null };
+      }
+      
+      console.log('[getCurrentUser] Created new profile:', newProfile);
+      return { user, profile: newProfile };
+    }
+    
+    if (profileError) {
+      console.error('[getCurrentUser] Error fetching profile:', profileError);
+      return { user, profile: null };
+    }
+    
+    console.log('[getCurrentUser] Found existing profile:', profile);
     return {
       user,
       profile
@@ -155,16 +204,53 @@ export const handleRegister = supabaseRegister
 
 export const fetchAllUsers = async () => {
     try {
+        console.log('[fetchAllUsers] Starting to fetch all users...');
+        
+        // First, get all auth users to see who exists
+        const { data: authUsers, error: authError } = await supabase.auth.admin.listUsers();
+        if (authError) {
+            console.log('[fetchAllUsers] Cannot access auth.admin (expected in client), trying profiles only');
+        }
+        
         // Get all profiles with their object counts
         const { data: profiles, error: profilesError } = await supabase
             .from('profiles')
             .select('id, username')
         
-        if (profilesError) throw profilesError
+        if (profilesError) {
+            console.error('[fetchAllUsers] Error fetching profiles:', profilesError);
+            throw profilesError;
+        }
+        
+        console.log('[fetchAllUsers] Found profiles:', profiles?.length || 0);
+        
+        // Also get all unique user_ids from objects to find users without profiles
+        const { data: objectUsers, error: objectError } = await supabase
+            .from('objects')
+            .select('user_id')
+            .not('user_id', 'is', null);
+        
+        if (objectError) {
+            console.error('[fetchAllUsers] Error fetching object users:', objectError);
+        }
+        
+        // Find unique user IDs from objects
+        const uniqueObjectUserIds = [...new Set((objectUsers || []).map(obj => obj.user_id))];
+        console.log('[fetchAllUsers] Unique user IDs from objects:', uniqueObjectUserIds);
+        
+        // Find users who have objects but no profiles
+        const profileUserIds = (profiles || []).map(p => p.id);
+        const missingProfileUsers = uniqueObjectUserIds.filter(id => !profileUserIds.includes(id));
+        
+        if (missingProfileUsers.length > 0) {
+            console.log('[fetchAllUsers] Found users with objects but no profiles:', missingProfileUsers);
+            // Try to create profiles for missing users
+            await createMissingProfiles(missingProfileUsers);
+        }
         
         // Get object counts for each user
         const usersWithCounts = await Promise.all(
-            profiles.map(async (profile) => {
+            (profiles || []).map(async (profile) => {
                 const { count } = await supabase
                     .from('objects')
                     .select('*', { count: 'exact', head: true })
@@ -180,6 +266,8 @@ export const fetchAllUsers = async () => {
         
         const totalObjectCount = usersWithCounts.reduce((sum, user) => sum + user.object_count, 0)
         
+        console.log('[fetchAllUsers] Final user list:', usersWithCounts);
+        
         return {
             users: usersWithCounts,
             totalObjectCount
@@ -187,6 +275,92 @@ export const fetchAllUsers = async () => {
     } catch (error) {
         console.error('Failed to fetch users and counts:', error);
         return null;
+    }
+};
+
+// Helper function to create missing profiles
+const createMissingProfiles = async (userIds) => {
+    try {
+        console.log('[createMissingProfiles] Creating profiles for users:', userIds);
+        
+        for (const userId of userIds) {
+            try {
+                // Try to create a profile with a default username
+                const { data, error } = await supabase
+                    .from('profiles')
+                    .insert([{
+                        id: userId,
+                        username: `user_${userId.substring(0, 8)}`, // Use first 8 chars of UUID
+                        full_name: ''
+                    }])
+                    .select();
+                
+                if (error) {
+                    console.error('[createMissingProfiles] Error creating profile for', userId, ':', error);
+                } else {
+                    console.log('[createMissingProfiles] Created profile for', userId, ':', data);
+                }
+            } catch (err) {
+                console.error('[createMissingProfiles] Exception creating profile for', userId, ':', err);
+            }
+        }
+    } catch (error) {
+        console.error('[createMissingProfiles] Error in createMissingProfiles:', error);
+    }
+};
+
+// Manual function to fix missing profiles - can be called from app
+export const fixMissingProfiles = async () => {
+    try {
+        console.log('[fixMissingProfiles] Starting profile repair...');
+        
+        // Get all unique user IDs from objects
+        const { data: objectUsers, error: objectError } = await supabase
+            .from('objects')
+            .select('user_id')
+            .not('user_id', 'is', null);
+        
+        if (objectError) {
+            console.error('[fixMissingProfiles] Error fetching object users:', objectError);
+            return { success: false, message: objectError.message };
+        }
+        
+        const uniqueUserIds = [...new Set(objectUsers.map(obj => obj.user_id))];
+        console.log('[fixMissingProfiles] Found user IDs in objects:', uniqueUserIds);
+        
+        // Get existing profiles
+        const { data: profiles, error: profileError } = await supabase
+            .from('profiles')
+            .select('id')
+            .in('id', uniqueUserIds);
+        
+        if (profileError) {
+            console.error('[fixMissingProfiles] Error fetching profiles:', profileError);
+            return { success: false, message: profileError.message };
+        }
+        
+        const existingProfileIds = (profiles || []).map(p => p.id);
+        const missingProfileIds = uniqueUserIds.filter(id => !existingProfileIds.includes(id));
+        
+        console.log('[fixMissingProfiles] Missing profile IDs:', missingProfileIds);
+        
+        if (missingProfileIds.length > 0) {
+            await createMissingProfiles(missingProfileIds);
+            return { 
+                success: true, 
+                message: `Created ${missingProfileIds.length} missing profiles`,
+                createdProfiles: missingProfileIds.length
+            };
+        } else {
+            return { 
+                success: true, 
+                message: 'No missing profiles found',
+                createdProfiles: 0
+            };
+        }
+    } catch (error) {
+        console.error('[fixMissingProfiles] Error:', error);
+        return { success: false, message: error.message };
     }
 };
 

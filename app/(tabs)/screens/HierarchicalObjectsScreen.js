@@ -199,7 +199,14 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                             </View>
                         ))}
                     </ScrollView>
-                    <TouchableOpacity onPress={handleLogout} style={{ padding: 8 }}>
+                    <TouchableOpacity 
+                        onPress={() => {
+                            console.log('[LogoutButton] Logout button pressed in HierarchicalObjectsScreen');
+                            handleLogout();
+                        }} 
+                        style={{ padding: 8, backgroundColor: colors.lightGray100, borderRadius: 6 }}
+                        activeOpacity={0.7}
+                    >
                         <LogOut color={colors.blue600} size={24} />
                     </TouchableOpacity>
                 </View>

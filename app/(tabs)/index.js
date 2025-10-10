@@ -10,6 +10,7 @@ import {
     supabaseRegister as apiRegister,
     updateProperty as apiUpdateProperty,
     fetchAllUsers,
+    fixMissingProfiles,
     getCurrentSession,
     getCurrentUser
 } from './api';
@@ -121,6 +122,12 @@ const App = () => {
     }, [filterOption]);
 
     const handleFetchUsers = async () => {
+        // First try to fix any missing profiles
+        const fixResult = await fixMissingProfiles();
+        if (fixResult.success && fixResult.createdProfiles > 0) {
+            console.log('[handleFetchUsers] Fixed missing profiles:', fixResult.message);
+        }
+        
         const data = await fetchAllUsers();
         if (data) {
             setAllUsers(data.users);
@@ -165,17 +172,41 @@ const App = () => {
 
     const handleLogout = async () => {
         try {
+            console.log('[handleLogout] Logout button pressed');
+            
+            // Show loading state
+            setIsLoading(true);
+            
             const success = await apiLogout();
+            
             if (success) {
-                console.log('[handleLogout] Logout successful');
-                // Auth state change listener will handle state cleanup
+                console.log('[handleLogout] Logout API call successful');
+                // The auth state change listener should handle the rest
+                // But let's also manually clear state as a fallback
+                setTimeout(() => {
+                    if (userToken) {
+                        console.log('[handleLogout] Manually clearing state as fallback');
+                        setSession(null);
+                        setCurrentUser(null);
+                        setUserToken(null);
+                        setCurrentView('login');
+                        setObjectsHierarchy([]);
+                        setAllUsers([]);
+                        setFetchedTemplates({});
+                        setCurrentScreen('objects');
+                        setCurrentPath([]);
+                        setFilterOption(null);
+                    }
+                }, 1000);
             } else {
-                console.error('[handleLogout] Logout failed');
+                console.error('[handleLogout] Logout API call failed');
                 Alert.alert('Error', 'Failed to logout. Please try again.');
             }
         } catch (error) {
             console.error('[handleLogout] Error during logout:', error);
             Alert.alert('Error', 'An error occurred during logout.');
+        } finally {
+            setIsLoading(false);
         }
     };
 
