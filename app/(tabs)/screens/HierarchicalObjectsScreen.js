@@ -1,6 +1,6 @@
 import { Calculator, ChevronRight, Filter, LogOut, Menu, Plus } from 'lucide-react-native';
-import { useEffect, useState } from 'react';
-import { Animated, RefreshControl, ScrollView, StatusBar, Text, TouchableOpacity, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Animated, Platform, RefreshControl, ScrollView, StatusBar, Text, TouchableOpacity, View } from 'react-native';
 import HierarchicalObjectsSkeletonList from '../../../components/HierarchicalObjectsSkeletonList';
 import { fetchFormules as fetchFormulesApi } from '../api';
 import AppStyles, { colors } from '../AppStyles';
@@ -12,7 +12,7 @@ import { supabase } from '../config/config';
 
 const PropertyButton = ({ onClick }) => (
     <TouchableOpacity onPress={onClick} style={{ paddingVertical: 6, paddingHorizontal: 8 }}>
-        <Text style={{ color: colors.primary, fontWeight: '600' }}>Eigenschappen</Text>
+        <Text style={{ color: colors.black, fontWeight: '600' }}>Eigenschappen</Text>
     </TouchableOpacity>
 );
 
@@ -25,6 +25,34 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
     const [editingFormule, setEditingFormule] = useState(null);
     const [fabMenuOpen, setFabMenuOpen] = useState(false);
     const [fabMenuAnimation] = useState(new Animated.Value(0));
+    // Ensure skeleton visible for at least 1s when loading toggles on
+    const [showSkeleton, setShowSkeleton] = useState(false);
+    const skeletonTimerRef = useRef(null);
+    useEffect(() => {
+        if (isLoading) {
+            // Immediately show skeleton when loading starts
+            if (skeletonTimerRef.current) {
+                clearTimeout(skeletonTimerRef.current);
+                skeletonTimerRef.current = null;
+            }
+            setShowSkeleton(true);
+        } else {
+            // Delay hiding skeleton to ensure a minimum display duration
+            // Keep it on screen for ~1s after loading completes
+            if (showSkeleton) {
+                skeletonTimerRef.current = setTimeout(() => {
+                    setShowSkeleton(false);
+                    skeletonTimerRef.current = null;
+                }, 1000);
+            }
+        }
+        return () => {
+            if (skeletonTimerRef.current) {
+                clearTimeout(skeletonTimerRef.current);
+                skeletonTimerRef.current = null;
+            }
+        };
+    }, [isLoading]);
 
     // Fetch Formules on component mount and set up real-time subscriptions
     useEffect(() => {
@@ -205,7 +233,7 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                             console.log('[LogoutButton] Logout button pressed in HierarchicalObjectsScreen');
                             handleLogout();
                         }} 
-                        style={{ padding: 8, backgroundColor: colors.lightGray100, borderRadius: 6 }}
+                        style={{ padding: 8, backgroundColor: 'transparent', borderRadius: 6 }}
                         activeOpacity={0.7}
                     >
                         <LogOut color={colors.blue600} size={24} />
@@ -217,8 +245,15 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                 refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.blue600]} tintColor={colors.blue600} />}
             >
                 <View style={AppStyles.cardList}>
-                    {isLoading ? (
-                        <HierarchicalObjectsSkeletonList count={6} />
+                    {(isLoading || showSkeleton) ? (
+                        Platform.OS === 'web' ? (
+                            <HierarchicalObjectsSkeletonList />
+                        ) : (
+                            <View style={{ paddingVertical: 32, alignItems: 'center', justifyContent: 'center' }}>
+                                <ActivityIndicator size="large" color={colors.blue600} />
+                                <Text style={{ marginTop: 12, color: colors.lightGray600 }}>Loading…</Text>
+                            </View>
+                        )
                     ) : items.length > 0 ? (
                         items.map((item) => (
                             <TouchableOpacity
