@@ -181,6 +181,12 @@ const AppStyles = StyleSheet.create({
         padding: 1 * 16,
         ...shadows.sm,
     },
+    // Group member variant: offset and different subtle color to differentiate
+    cardGroupMember: {
+        marginLeft: 16,
+        backgroundColor: colors.lightGray50,
+        borderColor: colors.lightGray300,
+    },
     cardFlex: {
         flexDirection: 'row',
         alignItems: 'center',

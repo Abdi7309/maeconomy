@@ -363,10 +363,11 @@ export const fixMissingProfiles = async () => {
     }
 };
 
-// Helper function to fetch object children recursively
+// Helper function to fetch object children recursively (includes linked children via object_links)
 const fetchObjectChildren = async (parentId) => {
-  try {
-    const { data, error } = await supabase
+    try {
+        // 1) Direct children
+        const { data: directChildren, error } = await supabase
       .from('objects')
       .select(`
         *,
@@ -379,9 +380,52 @@ const fetchObjectChildren = async (parentId) => {
       .order('naam')
     
     if (error) throw error
-    
-    // Get unique user IDs for this batch of children
-    const userIds = [...new Set(data.map(obj => obj.user_id).filter(Boolean))];
+        // 2) Linked children via object_links (best-effort; if table missing, skip)
+        let linkedChildren = []
+        let linkRows = []
+        try {
+            const { data: lr, error: linkErr } = await supabase
+                .from('object_links')
+                .select('id, child_id, group_key')
+                .eq('parent_id', parentId)
+            if (!linkErr && lr && lr.length) {
+                linkRows = lr
+                const linkedIds = lr.map(r => r.child_id) // allow duplicates (no Set)
+                if (linkedIds.length) {
+                    const { data: linkedObjs, error: linkedFetchErr } = await supabase
+                        .from('objects')
+                        .select(`
+                            *,
+                            eigenschappen(*,
+                                formules(name, formule),
+                                property_files(*)
+                            )
+                        `)
+                        .in('id', Array.from(new Set(linkedIds)))
+                        .order('naam')
+                    if (!linkedFetchErr && Array.isArray(linkedObjs)) {
+                        // Map id -> object for lookup, then rebuild array preserving duplicates by linkRows order
+                        const objMap = new Map(linkedObjs.map(o => [o.id, o]))
+                        linkedChildren = lr.map(row => ({ ...objMap.get(row.child_id), __link_group_key: row.group_key || null })).filter(Boolean)
+                    }
+                }
+            }
+        } catch (e) {
+            // Table may not exist or RLS might block; ignore and proceed with no links
+            console.warn('[fetchObjectChildren] object_links not available or inaccessible, skipping links')
+        }
+
+        // Combine keeping duplicates: direct followed by linked instances
+        // Tag entries with __instanceKey for UI keys
+        const combined = []
+        ;(directChildren || []).forEach((o) => combined.push({ ...o, __instanceKey: `dir:${o.id}` }))
+        ;(linkedChildren || []).forEach((o, idx) => {
+            const linkId = linkRows[idx]?.id || `${parentId}:${o.id}:${idx}`
+            combined.push({ ...o, __instanceKey: `link:${linkId}`, group_key: o.__link_group_key ?? o.group_key })
+        })
+
+        // Get unique user IDs for this batch of children
+        const userIds = [...new Set(combined.map(obj => obj.user_id).filter(Boolean))];
     
     // Fetch profiles for users
     let profileMap = {};
@@ -396,8 +440,8 @@ const fetchObjectChildren = async (parentId) => {
       });
     }
     
-    const childrenWithGrandchildren = await Promise.all(
-      data.map(async (child) => {
+        const childrenWithGrandchildren = await Promise.all(
+                    combined.map(async (child) => {
         const grandchildren = await fetchObjectChildren(child.id)
         const profile = profileMap[child.user_id];
         return {
@@ -423,7 +467,7 @@ export const fetchAndSetAllObjects = async (filterOption) => {
     try {
         console.log('[fetchAndSetAllObjects] Fetching objects with filter:', filterOption);
         
-        // First get objects without profile join to avoid foreign key issues
+        // First get top-level direct objects (parent_id is null)
         let query = supabase
             .from('objects')
             .select(`
@@ -440,14 +484,45 @@ export const fetchAndSetAllObjects = async (filterOption) => {
             query = query.eq('user_id', filterOption)
         }
         
-        const { data, error } = await query
+        const { data: directTop, error } = await query
         
         if (error) throw error
         
-        console.log('[fetchAndSetAllObjects] Found', data?.length || 0, 'objects');
+        console.log('[fetchAndSetAllObjects] Found', directTop?.length || 0, 'direct top-level objects');
+        
+        // Also get linked top-level objects (parent link at root). Best-effort; if table missing, skip.
+        let linkedTop = []
+        try {
+            const { data: lr, error: linkErr } = await supabase
+                .from('object_links')
+                .select('id, child_id, group_key')
+                .is('parent_id', null)
+            if (!linkErr && lr && lr.length) {
+                const ids = Array.from(new Set(lr.map(r => r.child_id)))
+                if (ids.length) {
+                    const { data: linkedObjs, error: linkedFetchErr } = await supabase
+                        .from('objects')
+                        .select(`
+                            *,
+                            eigenschappen(*,
+                                formules(name, formule),
+                                property_files(*)
+                            )
+                        `)
+                        .in('id', ids)
+                        .order('naam')
+                    if (!linkedFetchErr && Array.isArray(linkedObjs)) {
+                        const map = new Map(linkedObjs.map(o => [o.id, o]))
+                        linkedTop = lr.map(r => ({ ...map.get(r.child_id), __instanceKey: `rootlink:${r.id}`, group_key: r.group_key || map.get(r.child_id)?.group_key || null })).filter(Boolean)
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('[fetchAndSetAllObjects] object_links not available or inaccessible at root, skipping links')
+        }
         
         // Get all unique user IDs to fetch profiles
-        const userIds = [...new Set(data.map(obj => obj.user_id).filter(Boolean))];
+        const userIds = [...new Set([...(directTop||[]), ...(linkedTop||[])].map(obj => obj.user_id).filter(Boolean))];
         console.log('[fetchAndSetAllObjects] Fetching profiles for users:', userIds);
         
         // Fetch profiles for all users
@@ -466,9 +541,15 @@ export const fetchAndSetAllObjects = async (filterOption) => {
             profileMap[profile.id] = profile;
         });
         
+        // Combine direct and linked, preserving duplicates; tag direct with instance key
+        const combinedTop = [
+            ...(directTop || []).map(o => ({ ...o, __instanceKey: `rootdir:${o.id}` })),
+            ...(linkedTop || []),
+        ]
+
         // Fetch children recursively for each object
         const objectsWithChildren = await Promise.all(
-            data.map(async (obj) => {
+            combinedTop.map(async (obj) => {
                 const children = await fetchObjectChildren(obj.id)
                 const profile = profileMap[obj.user_id];
                 return {
@@ -493,34 +574,69 @@ export const fetchAndSetAllObjects = async (filterOption) => {
 
 export const handleAddObject = async (parentPath, newObjectData, userToken) => {
     const parentId = parentPath.length > 0 ? parentPath[parentPath.length - 1] : null;
-    const { name } = newObjectData;
+    const { name, names, groupKey: externalGroupKey, materialFlowType = 'default' } = newObjectData || {};
 
     try {
-        console.log('[handleAddObject] Creating object:', name, 'for user:', userToken, 'parent:', parentId);
-        
-        const { data, error } = await supabase
-            .from('objects')
-            .insert([
-                {
-                    parent_id: parentId,
-                    naam: name,
-                    user_id: userToken,
-                }
-            ])
-            .select()
-        
-        if (error) {
-            console.error('[handleAddObject] Database error:', error);
-            throw error;
+        // Normalize list of names
+        let items = [];
+        if (Array.isArray(names) && names.length > 0) {
+            items = names
+                .map(n => (n || '').trim())
+                .filter(Boolean);
+        } else if (typeof name === 'string' && name.trim()) {
+            items = [name.trim()];
         }
-        
-        console.log('[handleAddObject] Object created successfully:', data);
-        Alert.alert('Success', 'Object created successfully!')
-        return true
+
+        if (items.length === 0) {
+            Alert.alert('Input required', 'Please provide at least one name.');
+            return false;
+        }
+
+        // Remove duplicates while preserving order
+        const seen = new Set();
+        const uniqueNames = items.filter(n => (seen.has(n) ? false : (seen.add(n), true)));
+
+        console.log('[handleAddObject] Creating objects:', uniqueNames, 'for user:', userToken, 'parent:', parentId);
+
+    // If external groupKey provided (to join with existing links), use it; else if multiple, generate shared group_key
+    const groupKey = externalGroupKey || (uniqueNames.length > 1 ? `${Date.now()}_${Math.random().toString(36).slice(2, 10)}` : null);
+
+        const payload = uniqueNames.map((n) => ({
+            parent_id: parentId,
+            naam: n,
+            user_id: userToken,
+            material_flow_type: materialFlowType,
+            ...(groupKey ? { group_key: groupKey } : {})
+        }));
+
+        let insertRes = await supabase
+            .from('objects')
+            .insert(payload);
+
+        if (insertRes.error) {
+            // Fallback if group_key column doesn't exist yet
+            const msg = insertRes.error.message || '';
+            if (insertRes.error.code === '42703' || msg.includes('group_key') || msg.includes('material_flow_type')) {
+                console.warn('[handleAddObject] column missing, retrying without it');
+                const payloadFallback = payload.map(({ group_key, material_flow_type, ...rest }) => rest);
+                insertRes = await supabase
+                    .from('objects')
+                    .insert(payloadFallback);
+            }
+        }
+
+        if (insertRes.error) {
+            console.error('[handleAddObject] Database error:', insertRes.error);
+            throw insertRes.error;
+        }
+
+        console.log('[handleAddObject] Objects created successfully:', uniqueNames.length);
+        Alert.alert('Success', `${uniqueNames.length} object(en) succesvol aangemaakt`);
+        return true;
     } catch (error) {
-        console.error('Error adding object:', error)
-        Alert.alert('Error', error.message || 'Failed to create object')
-        return false
+        console.error('Error adding object(s):', error);
+        Alert.alert('Error', error.message || 'Failed to create object(s)');
+        return false;
     }
 }
 
@@ -944,3 +1060,267 @@ export const createTemplate = async (templateName, properties, userId = null) =>
 }
 
 export default () => null;
+
+// ---------------- Materials APIs ----------------
+// Expected tables (create these in Supabase SQL editor):
+//
+// create table if not exists public.materials (
+//   id uuid primary key default gen_random_uuid(),
+//   name text not null,
+//   unit text not null default 'kg',
+//   total_quantity numeric not null default 0,
+//   user_id uuid references auth.users(id),
+//   created_at timestamp with time zone default now()
+// );
+//
+// create table if not exists public.material_allocations (
+//   id uuid primary key default gen_random_uuid(),
+//   material_id uuid not null references public.materials(id) on delete cascade,
+//   object_id uuid not null references public.objects(id) on delete cascade,
+//   quantity numeric not null check (quantity >= 0),
+//   created_at timestamp with time zone default now()
+// );
+//
+// -- Enable RLS and basic policies similar to other tables.
+
+export const fetchMaterials = async () => {
+    try {
+        // Fetch materials with allocated sum
+        const { data: materials, error } = await supabase
+            .from('materials')
+            .select('*')
+            .order('name');
+        if (error) throw error;
+
+        // Get allocations grouped by material
+        const { data: grouped, error: allocErr } = await supabase
+            .from('material_allocations')
+            .select('material_id, quantity, is_budget');
+        if (allocErr && allocErr.code !== 'PGRST116') throw allocErr; // ignore no rows
+        const allocatedByMaterial = (grouped || []).reduce((acc, row) => {
+            // Only count non-budget allocations as consumption
+            if (!row.is_budget) {
+                acc[row.material_id] = (acc[row.material_id] || 0) + Number(row.quantity || 0);
+            }
+            return acc;
+        }, {});
+
+        return (materials || []).map(m => {
+            const allocated = allocatedByMaterial[m.id] || 0;
+            const available = Number(m.total_quantity || 0) - allocated;
+            return { ...m, allocated, available };
+        });
+    } catch (e) {
+        console.error('[fetchMaterials] error', e);
+        return [];
+    }
+};
+
+export const createMaterial = async ({ name, unit = 'kg', total_quantity = 0, user_id = null }) => {
+    try {
+        const payload = { name: name.trim(), unit, total_quantity, user_id };
+        const { data, error } = await supabase.from('materials').insert([payload]).select().single();
+        if (error) throw error;
+        return { success: true, material: data };
+    } catch (e) {
+        console.error('[createMaterial] error', e);
+        return { success: false, message: e.message };
+    }
+};
+
+export const allocateMaterial = async ({ material_id, object_id, quantity, is_budget = false }) => {
+    try {
+        const { data, error } = await supabase
+            .from('material_allocations')
+            .insert([{ material_id, object_id, quantity, is_budget }])
+            .select()
+            .single();
+        if (error) throw error;
+        return { success: true, allocation: data };
+    } catch (e) {
+        console.error('[allocateMaterial] error', e);
+        return { success: false, message: e.message };
+    }
+};
+
+export const fetchAllocationsForMaterial = async (material_id) => {
+    try {
+        const { data, error } = await supabase
+            .from('material_allocations')
+            .select('id, quantity, object_id')
+            .eq('material_id', material_id);
+        if (error) throw error;
+        return data || [];
+    } catch (e) {
+        console.error('[fetchAllocationsForMaterial] error', e);
+        return [];
+    }
+};
+
+// Flatten objects tree to a simple list for pickers
+export const flattenObjects = (nodes) => {
+    const out = [];
+    const walk = (items, prefix = []) => {
+        (items || []).forEach((n) => {
+            const path = [...prefix, n.naam];
+            const hasChildren = Array.isArray(n.children) && n.children.length > 0;
+            out.push({ id: n.id, name: n.naam, pathLabel: path.join(' / '), hasChildren });
+            if (Array.isArray(n.children) && n.children.length) {
+                walk(n.children, path);
+            }
+        });
+    };
+    walk(nodes, []);
+    return out;
+};
+
+// Create parent-child links without duplication
+export const linkObjects = async ({ parentId, childIds, groupKey = null }) => {
+    try {
+        console.log('[linkObjects] start', { parentId, childIds });
+        if (!Array.isArray(childIds) || childIds.length === 0) {
+            console.warn('[linkObjects] missing children');
+            return { success: false, message: 'Missing children' };
+        }
+        // Allow parentId to be null for root-level links
+        const rows = [...new Set(childIds)]
+            .filter((id) => id && (parentId == null ? true : id !== parentId))
+            .map((id) => ({ parent_id: parentId ?? null, child_id: id, ...(groupKey ? { group_key: groupKey } : {}) }));
+        if (rows.length === 0) {
+            console.warn('[linkObjects] nothing to link after filtering');
+            return { success: true };
+        }
+
+        // Upsert to avoid duplicate errors if link already exists
+        let { data, error } = await supabase
+            .from('object_links')
+            .upsert(rows, { onConflict: 'parent_id,child_id', ignoreDuplicates: true });
+        // If group_key column missing, retry without it
+        if (error && (error.code === '42703' || (error.message || '').includes('group_key'))) {
+            console.warn('[linkObjects] group_key column missing in object_links, retrying without group key');
+            const rowsNoGroup = rows.map(({ group_key, ...rest }) => rest);
+            const retry = await supabase
+                .from('object_links')
+                .upsert(rowsNoGroup, { onConflict: 'parent_id,child_id', ignoreDuplicates: true });
+            data = retry.data;
+            error = retry.error;
+        }
+        console.log('[linkObjects] upsert result', { error: error?.message, inserted: data?.length });
+        if (error) throw error;
+        return { success: true };
+    } catch (e) {
+        // If table missing, return a specific hint
+        if ((e.code === '42P01') || /object_links/i.test(e.message || '')) {
+            console.warn('[linkObjects] table missing or inaccessible', e);
+            return { success: false, message: 'object_links_missing' };
+        }
+        // Unique violation => treat as success (already linked)
+        if (e.code === '23505') {
+            console.warn('[linkObjects] unique violation treated as success');
+            return { success: true };
+        }
+        console.error('[linkObjects] error', e);
+        return { success: false, message: e.message || 'Linking failed' };
+    }
+};
+
+// ---------------- Object clone (deep) ----------------
+// Duplicate an object with its properties and entire subtree under a new parent
+export const duplicateObjectWithSubtree = async ({ objectId, newParentId }) => {
+    try {
+        const { data: srcObj, error: objErr } = await supabase
+            .from('objects')
+            .select('id, naam, user_id, group_key')
+            .eq('id', objectId)
+            .single();
+        if (objErr) throw objErr;
+
+        // Create the new object row
+        const baseInsert = { parent_id: newParentId, naam: srcObj.naam, user_id: srcObj.user_id };
+        const insertPayload = srcObj.group_key ? { ...baseInsert, group_key: srcObj.group_key } : baseInsert;
+
+        let { data: newObj, error: insErr } = await supabase
+            .from('objects')
+            .insert([insertPayload])
+            .select('id')
+            .single();
+        if (insErr && (insErr.code === '42703' || (insErr.message || '').includes('group_key'))) {
+            // Retry without group_key column if not present
+            const retry = await supabase.from('objects').insert([baseInsert]).select('id').single();
+            insErr = retry.error || null;
+            newObj = retry.data;
+        }
+        if (insErr) throw insErr;
+
+        const newObjectId = newObj.id;
+
+        // Clone properties
+        const { data: props, error: propsErr } = await supabase
+            .from('eigenschappen')
+            .select('id, name, waarde, eenheid, formule_id')
+            .eq('object_id', objectId);
+        if (propsErr && propsErr.code !== 'PGRST116') throw propsErr;
+
+        const propIdMap = {}; // oldPropId -> newPropId
+        if (props && props.length) {
+            // Insert all properties
+            const toInsert = props.map((p) => ({
+                object_id: newObjectId,
+                name: p.name,
+                waarde: p.waarde,
+                eenheid: p.eenheid || '',
+                formule_id: p.formule_id || null,
+            }));
+            const { data: newProps, error: insPropsErr } = await supabase
+                .from('eigenschappen')
+                .insert(toInsert)
+                .select('id');
+            if (insPropsErr) throw insPropsErr;
+            // Map in order (assume same order returned)
+            props.forEach((oldP, idx) => {
+                propIdMap[oldP.id] = newProps[idx]?.id;
+            });
+            // Clone property files for each property
+            for (const oldP of props) {
+                const newPid = propIdMap[oldP.id];
+                if (!newPid) continue;
+                const { data: files, error: filesErr } = await supabase
+                    .from('property_files')
+                    .select('file_name, file_path, file_type, file_size')
+                    .eq('property_id', oldP.id);
+                if (filesErr && filesErr.code !== 'PGRST116') throw filesErr;
+                if (files && files.length) {
+                    const fileRows = files.map((f) => ({
+                        property_id: newPid,
+                        file_name: f.file_name,
+                        file_path: f.file_path,
+                        file_type: f.file_type,
+                        file_size: f.file_size,
+                    }));
+                    const { error: fileInsErr } = await supabase
+                        .from('property_files')
+                        .insert(fileRows);
+                    if (fileInsErr) throw fileInsErr;
+                }
+            }
+        }
+
+        // Fetch direct children and recursively clone
+        const { data: children, error: childErr } = await supabase
+            .from('objects')
+            .select('id')
+            .eq('parent_id', objectId);
+        if (childErr && childErr.code !== 'PGRST116') throw childErr;
+        if (children && children.length) {
+            for (const ch of children) {
+                const res = await duplicateObjectWithSubtree({ objectId: ch.id, newParentId: newObjectId });
+                if (!res.success) throw new Error(res.message || 'Child clone failed');
+            }
+        }
+
+        return { success: true, newObjectId };
+    } catch (e) {
+        console.error('[duplicateObjectWithSubtree] error', e);
+        return { success: false, message: e.message };
+    }
+};

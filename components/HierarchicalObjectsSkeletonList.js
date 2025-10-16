@@ -1,4 +1,5 @@
 // components/HierarchicalObjectsSkeletonList.js
+import { Square } from 'lucide-react-native';
 import { useEffect, useRef } from 'react';
 import { Animated, Platform, View } from 'react-native';
 import { colors } from '../app/(tabs)/AppStyles';
@@ -57,16 +58,21 @@ const HierarchicalObjectsSkeletonList = ({ count = 6 }) => {
   if (Platform.OS !== 'web') {
     return null;
   }
-  // Web-only fallback skeleton blocks (no native dependency)
+  // Web-only fallback skeleton blocks (no native dependency fack
   return (
     <View style={{ paddingHorizontal: 16, paddingTop: 10 }}>
       {Array.from({ length: count }).map((_, index) => (
         <Animated.View key={index} style={animatedStyle}>
           <CardContainer>
-            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}> 
+              {/* Icon loading placeholder */}
+              <View style={{ alignItems: 'center', justifyContent: 'center', left: 5, marginRight: 15, minWidth: 40 }}>
+                <Square color={colors.lightGray400} size={24} />
+                <FallbackBlock style={{ width: 60, height: 6, borderRadius: 3, left: 0, marginTop: 4 }} />
+              </View>
               {/* Left text-only section (exactly 3 lines) */}
               <View style={{ flex: 1, marginRight: 14 }}>
-                <FallbackBlock style={{ width: '21%', height: 16, borderRadius: 6, marginBottom: 8 }} />
+                <FallbackBlock style={{ width: '21%', height: 16, borderRadius: 6, marginBottom: 13 }} />
                 <FallbackBlock style={{ width: '28%', height: 14, borderRadius: 6, marginBottom: 8 }} />
                 <FallbackBlock style={{ width: '36%', height: 14, borderRadius: 6 }} />
               </View>
@@ -83,3 +89,4 @@ const HierarchicalObjectsSkeletonList = ({ count = 6 }) => {
 };
 
 export default HierarchicalObjectsSkeletonList;
+

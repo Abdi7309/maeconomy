@@ -370,6 +370,13 @@ const App = () => {
                         findItemByPath={findItemByPath}
                     />
                 );
+            case 'materials':
+                return (
+                    <MaterialsScreen
+                        setCurrentScreen={setCurrentScreen}
+                        objectsHierarchy={objectsHierarchy}
+                    />
+                );
             default:
                 return objectsScreen;
         }
