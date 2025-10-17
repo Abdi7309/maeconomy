@@ -45,11 +45,46 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
     const [fabMenuOpen, setFabMenuOpen] = useState(false);
     const [showAddChoice, setShowAddChoice] = useState(false);
     const [fabMenuAnimation] = useState(new Animated.Value(0));
+    // Local state for instant UI update
+    const [localItems, setLocalItems] = useState(items || []);
+    // Keep localItems in sync with items prop (database objects)
+    useEffect(() => {
+        // If there are temporary objects, swap them with matching database objects
+        setLocalItems((prevLocal) => {
+            if (!items || items.length === 0) return [];
+            // Find temp objects by __instanceKey
+            const tempObjects = prevLocal.filter(obj => typeof obj.id === 'string' && obj.id.startsWith('temp_'));
+            if (tempObjects.length === 0) return items;
+            // For each temp object, try to find a matching db object by name and groupKey
+            let merged = [...items];
+            tempObjects.forEach(tempObj => {
+                const matchIdx = merged.findIndex(dbObj =>
+                    dbObj.naam === tempObj.naam &&
+                    (dbObj.group_key || null) === (tempObj.group_key || null)
+                );
+                if (matchIdx === -1) {
+                    // If not found, keep temp object at the top
+                    merged = [tempObj, ...merged];
+                }
+            });
+            // Remove duplicate temp objects if db version exists
+            merged = merged.filter((obj, idx, arr) => {
+                if (typeof obj.id === 'string' && obj.id.startsWith('temp_')) {
+                    // If a db version exists, skip temp
+                    return arr.findIndex(o => o.naam === obj.naam && (o.group_key || null) === (obj.group_key || null) && !(typeof o.id === 'string' && o.id.startsWith('temp_'))) === -1;
+                }
+                return true;
+            });
+            return merged;
+        });
+    }, [items]);
+    const [localObjectsHierarchy, setLocalObjectsHierarchy] = useState(objectsHierarchy || []);
     // Track how user navigated into the current level to influence breadcrumb labels
     const selectionContextRef = useRef({ pathKey: '', preferSoloLabel: false });
     // Animated progress bar for object creation
     const [showAddLoading, setShowAddLoading] = useState(false);
     const [addProgress, setAddProgress] = useState(0);
+    const [isAttachingExisting, setIsAttachingExisting] = useState(false);
     const lastLoadWasAddRef = useRef(false);
     const progressIntervalRef = useRef(null);
     const wrappedOnAddObject = async (...args) => {
@@ -66,7 +101,54 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                 }
             });
         }, 80);
-        await onAddObject(...args);
+        // INSTANT UI UPDATE: Add object to local state
+        const [currentPath, data] = args;
+        let newObjects = [];
+        if (data) {
+            // Always generate a group_key for multiple objects if not present
+            let groupKey = data.groupKey;
+            if (data.names && !groupKey) {
+                groupKey = `g_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+            }
+            if (data.names) {
+                newObjects = data.names.map((name, idx) => ({
+                    id: `temp_${Date.now()}_${Math.random().toString(36).slice(2,8)}_${idx}`,
+                    naam: name,
+                    material_flow_type: data.materialFlowType || 'default',
+                    group_key: groupKey || null,
+                    properties: [],
+                    children: [],
+                    owner_name: 'Jij',
+                    created_at: new Date().toISOString(),
+                    __instanceKey: `temp_${Date.now()}_${Math.random().toString(36).slice(2,8)}_${idx}`
+                }));
+            } else if (data.name) {
+                newObjects = [{
+                    id: `temp_${Date.now()}_${Math.random().toString(36).slice(2,8)}`,
+                    naam: data.name,
+                    material_flow_type: data.materialFlowType || 'default',
+                    group_key: groupKey || null,
+                    properties: [],
+                    children: [],
+                    owner_name: 'Jij',
+                    created_at: new Date().toISOString(),
+                    __instanceKey: `temp_${Date.now()}_${Math.random().toString(36).slice(2,8)}`
+                }];
+            }
+        }
+        // Add to localItems
+        setLocalItems((prev) => [...newObjects, ...prev]);
+        // ASYNC DB SAVE
+        try {
+            await onAddObject(...args);
+            // After successful save, refresh from database
+            if (onRefresh) {
+                await onRefresh();
+                // Do not setLocalItems here; let useEffect handle merging
+            }
+        } catch (e) {
+            Alert.alert('Fout', 'Opslaan naar database mislukt. Probeer opnieuw.');
+        }
         // Complete progress
         setAddProgress(100);
         setTimeout(() => {
@@ -81,6 +163,8 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
     };
     // Skeleton loader logic: show skeleton when isLoading is true and not adding object
     const showSkeleton = isLoading && !lastLoadWasAddRef.current;
+    // Don't show skeleton when attaching existing objects
+    const showSkeletonFixed = showSkeleton && !isAttachingExisting;
 
     // Fetch Formules on component mount and set up real-time subscriptions
     useEffect(() => {
@@ -339,7 +423,7 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
             >
                 <View style={AppStyles.cardList}>
                     {/* Loading bar is now fixed at top, not inside scrollable area */}
-                    {showSkeleton ? (
+                    {showSkeletonFixed ? (
                         Platform.OS === 'web' ? (
                             <HierarchicalObjectsSkeletonList />
                         ) : (
@@ -348,10 +432,10 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                                 <Text style={{ marginTop: 12, color: colors.lightGray600 }}>Loading…</Text>
                             </View>
                         )
-                    ) : items.length > 0 ? (
+                    ) : localItems.length > 0 ? (
                         // ...existing code for rendering object cards...
                         (Object.values(
-                            (items || []).reduce((acc, it) => {
+                            (localItems || []).reduce((acc, it) => {
                                 const ik = it.__instanceKey || '';
                                 const key = it.group_key ? `grp:${it.group_key}` : `solo:${ik || it.id}`;
                                 if (!acc[key]) acc[key] = { group_key: it.group_key || null, items: [] };
@@ -713,14 +797,23 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                     mode={addModalMode}
                     onClose={() => setShowAddObjectModal(false)}
                     onSave={(payload) => {
+                        setShowAddObjectModal(false); // Close instantly
                         const data = (payload && typeof payload === 'object' && !Array.isArray(payload))
                             ? payload
                             : (Array.isArray(payload) ? { names: payload } : { name: payload });
-                        return wrappedOnAddObject(currentLevelPath, data);
+                        wrappedOnAddObject(currentLevelPath, data);
                     }}
                     objectsHierarchy={objectsHierarchy}
                     excludeIds={currentLevelPath}
                     onAttachExisting={async (payload) => {
+                        // Start attaching progress
+                        setIsAttachingExisting(true);
+                        lastLoadWasAddRef.current = true;
+                        setShowAddLoading(true);
+                        setAddProgress(0);
+                        progressIntervalRef.current = setInterval(() => {
+                            setAddProgress((prev) => (prev < 90 ? prev + 5 : prev));
+                        }, 80);
                         try {
                             const isObj = payload && typeof payload === 'object' && !Array.isArray(payload);
                             const ids = isObj ? payload.ids : payload;
@@ -736,9 +829,7 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                                 console.warn('[AttachExisting] nothing to link after filtering self');
                                 return;
                             }
-                            lastLoadWasAddRef.current = true;
                             const linkRes = await linkObjects({ parentId, childIds: filtered, groupKey });
-                            lastLoadWasAddRef.current = false;
                             console.log('[AttachExisting] link result', linkRes);
                             if (!linkRes.success) {
                                 if (linkRes.message === 'object_links_missing') {
@@ -749,15 +840,27 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                                     throw new Error(linkRes.message || 'Linking failed');
                                 }
                             }
-                            if (onRefresh) onRefresh();
+                            if (onRefresh) await onRefresh();
                             if (!deferClose) {
                                 Alert.alert('Gelinkt', parentId == null ? 'Object succesvol aan de hoofdniveau gekoppeld.' : 'Object succesvol gekoppeld.');
                                 setShowAddObjectModal(false);
                             }
                         } catch (e) {
-                            lastLoadWasAddRef.current = false;
                             console.error('[AttachExisting] Failed', e);
                             Alert.alert('Fout', e.message || 'Koppelen mislukt');
+                        } finally {
+                            // Stop attaching progress
+                            lastLoadWasAddRef.current = false;
+                            setIsAttachingExisting(false);
+                            setAddProgress(100);
+                            setTimeout(() => {
+                                setShowAddLoading(false);
+                                setAddProgress(0);
+                                if (progressIntervalRef.current) {
+                                    clearInterval(progressIntervalRef.current);
+                                    progressIntervalRef.current = null;
+                                }
+                            }, 350);
                         }
                     }}
                 />

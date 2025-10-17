@@ -56,11 +56,17 @@ const AddObjectModal = ({ visible, onClose, onSave, onAttachExisting, objectsHie
         const existingNameSet = new Set(selectedExisting.map(s => (s.name || '').trim().toLowerCase()));
         const uniqueFiltered = unique.filter(n => !existingNameSet.has(n.trim().toLowerCase()));
 
+        // Always generate a groupKey for multiple creation
+        let groupKey = null;
+        if (mode === 'multiple' && uniqueFiltered.length > 0) {
+            groupKey = `g_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        } else if (selectedExistingIds.length > 0) {
+            groupKey = `g_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        }
         // Close modal immediately
         onClose();
         try {
-            console.log('[AddObjectModal] handleSave start', { cleaned, unique, uniqueFiltered, selectedExistingIds });
-            const groupKey = (selectedExistingIds.length > 0) ? `g_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : null;
+            console.log('[AddObjectModal] handleSave start', { cleaned, unique, uniqueFiltered, selectedExistingIds, groupKey });
             if (uniqueFiltered.length > 0) {
                 if (mode === 'single') {
                     console.log('[AddObjectModal] Creating new (single):', uniqueFiltered[0], 'groupKey:', groupKey, 'flowType:', selectedFlowType);
