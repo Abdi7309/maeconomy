@@ -45,6 +45,11 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
     const [fabMenuOpen, setFabMenuOpen] = useState(false);
     const [showAddChoice, setShowAddChoice] = useState(false);
     const [fabMenuAnimation] = useState(new Animated.Value(0));
+    // Summary modal state (temporary, not persisted)
+    const [showSummaryModal, setShowSummaryModal] = useState(false);
+    const [summaryMap, setSummaryMap] = useState({}); // id -> { total, own, childrenSum, name }
+    const [summaryRootTotal, setSummaryRootTotal] = useState(null);
+    const [summaryPropertyName, setSummaryPropertyName] = useState('Oppervlakte');
     // Local state for instant UI update
     const [localItems, setLocalItems] = useState(items || []);
     // Keep localItems in sync with items prop (database objects)
@@ -79,8 +84,33 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
         });
     }, [items]);
     const [localObjectsHierarchy, setLocalObjectsHierarchy] = useState(objectsHierarchy || []);
+    // Keep localObjectsHierarchy in sync with prop updates
+    useEffect(() => {
+        setLocalObjectsHierarchy(objectsHierarchy || []);
+    }, [objectsHierarchy]);
     // Track how user navigated into the current level to influence breadcrumb labels
     const selectionContextRef = useRef({ pathKey: '', preferSoloLabel: false });
+    // Ref for the breadcrumb ScrollView so we can auto-scroll to show the current crumb
+    const breadcrumbScrollRef = useRef(null);
+    const [breadcrumbContentWidth, setBreadcrumbContentWidth] = useState(0);
+    const [breadcrumbViewWidth, setBreadcrumbViewWidth] = useState(0);
+    const [breadcrumbScrollX, setBreadcrumbScrollX] = useState(0);
+    const handleBreadcrumbWheel = (e) => {
+        // Only on web
+        if (Platform.OS !== 'web') return;
+        try {
+            const deltaY = e.deltaY || e.nativeEvent?.deltaY || 0;
+            const multiplier = 1; // tune scroll speed
+            const target = Math.max(0, breadcrumbScrollX + deltaY * multiplier);
+            if (breadcrumbScrollRef && breadcrumbScrollRef.current && typeof breadcrumbScrollRef.current.scrollTo === 'function') {
+                breadcrumbScrollRef.current.scrollTo({ x: target, animated: true });
+            }
+            // prevent default vertical scrolling on the page when over breadcrumb area
+            if (e.preventDefault) e.preventDefault();
+        } catch (err) {
+            // ignore
+        }
+    };
     // Animated progress bar for object creation
     const [showAddLoading, setShowAddLoading] = useState(false);
     const [addProgress, setAddProgress] = useState(0);
@@ -352,6 +382,153 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
     };
     const breadcrumbs = getBreadcrumbs();
 
+    // Auto-scroll the breadcrumb row so the active (last) crumb is visible when currentLevelPath changes
+    useEffect(() => {
+        if (!breadcrumbScrollRef || !breadcrumbScrollRef.current) return;
+        // slight timeout to allow layout/render to complete
+        setTimeout(() => {
+            try {
+                // If we have measurements, compute an exact scroll target so the last crumb is visible
+                const extraRightPadding = 80; // space to leave for header buttons (px)
+                if (breadcrumbContentWidth > 0 && breadcrumbViewWidth > 0 && breadcrumbContentWidth > breadcrumbViewWidth) {
+                    const targetX = Math.max(0, breadcrumbContentWidth - breadcrumbViewWidth + extraRightPadding);
+                    if (typeof breadcrumbScrollRef.current.scrollTo === 'function') {
+                        breadcrumbScrollRef.current.scrollTo({ x: targetX, animated: true });
+                        return;
+                    }
+                }
+                // Fallback: scrollToEnd if measurements unavailable
+                if (typeof breadcrumbScrollRef.current.scrollToEnd === 'function') {
+                    breadcrumbScrollRef.current.scrollToEnd({ animated: true });
+                }
+            } catch (e) {
+                // ignore platform-specific errors
+            }
+        }, 80);
+    }, [currentLevelPath && currentLevelPath.join('/'), breadcrumbContentWidth, breadcrumbViewWidth]);
+
+    // --- SUMMARY COMPUTATION HELPERS ---
+    // Parse numeric value from property.value/waarde which may include units or commas
+    const _parseNumeric = (val) => {
+        if (val == null) return 0;
+        try {
+            const s = String(val).trim();
+            // Replace comma decimal with dot and strip non-numeric chars except dot and minus
+            const normalized = s.replace(',', '.').replace(/[^0-9.\-]+/g, ' ');
+            // Extract numbers (some fields may contain ranges or multiple numbers); sum them
+            const matches = normalized.match(/-?\d+(?:\.\d+)?/g);
+            if (!matches) return 0;
+            return matches.map((m) => parseFloat(m)).reduce((a, b) => a + b, 0);
+        } catch (e) {
+            return 0;
+        }
+    };
+
+    // Get own property total and count for a node for a given property name (case-insensitive, partial match)
+    const _getOwnPropertyTotal = (node, propName) => {
+        if (!node || !Array.isArray(node.properties)) return { total: 0, count: 0 };
+        const needle = (propName || '').toLowerCase();
+        let total = 0;
+        let count = 0;
+        (node.properties || []).forEach((p) => {
+            if (!p) return;
+            const pname = ((p.name || p.property_name || '') + '').toLowerCase();
+            if (needle === '' || pname.includes(needle)) {
+                // value may be in p.waarde (Dutch) or p.value
+                const val = (p.waarde != null ? p.waarde : (p.value != null ? p.value : p.waarde));
+                total += Number.isFinite(val) ? Number(val) : _parseNumeric(val);
+                count += 1;
+            }
+        });
+        return { total, count };
+    };
+
+    // Compute aggregated totals for all property names across the tree
+    const computeAllProperties = (nodes) => {
+        const map = {}; // id -> { name, props: { propName: { total, count } } }
+        const rootTotals = {}; // propName -> total
+
+        const walk = (node) => {
+            const ownProps = {};
+            // accept different shapes: properties or eigenschappen
+            const propsArr = Array.isArray(node.properties) ? node.properties : (Array.isArray(node.eigenschappen) ? node.eigenschappen : []);
+            if (Array.isArray(propsArr)) {
+                (propsArr || []).forEach((p) => {
+                    if (!p) return;
+                    const pname = (p.name || p.property_name || p.propertyName || p.naam || '').toString().trim();
+                    if (!pname) return;
+                    const val = (p.waarde != null ? p.waarde : (p.value != null ? p.value : p.waarde));
+                    const num = Number.isFinite(val) ? Number(val) : _parseNumeric(val);
+                    if (!ownProps[pname]) ownProps[pname] = { total: 0, count: 0 };
+                    ownProps[pname].total += num;
+                    ownProps[pname].count += 1;
+                });
+            }
+
+            // Start aggregated with ownProps
+            const aggregated = { ...ownProps };
+
+            // Recurse children and add their aggregated props
+            if (Array.isArray(node.children) && node.children.length > 0) {
+                node.children.forEach((ch) => {
+                    const childAgg = walk(ch);
+                    Object.keys(childAgg).forEach((pname) => {
+                        const c = childAgg[pname];
+                        if (!aggregated[pname]) aggregated[pname] = { total: 0, count: 0 };
+                        aggregated[pname].total += c.total;
+                        aggregated[pname].count += c.count;
+                    });
+                });
+            }
+
+            // Store per-node aggregated result
+            map[node.id] = { name: node.naam, props: aggregated };
+
+            return aggregated;
+        };
+
+        (nodes || []).forEach((n) => {
+            const agg = walk(n);
+            // accumulate into rootTotals
+            Object.keys(agg).forEach((pname) => {
+                rootTotals[pname] = (rootTotals[pname] || 0) + agg[pname].total;
+            });
+        });
+
+        return { map, rootTotals };
+    };
+
+    const openSummaryAll = () => {
+        try {
+            const source = (localObjectsHierarchy && localObjectsHierarchy.length) ? localObjectsHierarchy : (objectsHierarchy || []);
+            const { map, rootTotals } = computeAllProperties(source);
+            setSummaryMap(map);
+            setSummaryRootTotal(rootTotals);
+            setSummaryPropertyName('All properties');
+            setShowSummaryModal(true);
+        } catch (e) {
+            console.error('[Summary] compute failed', e);
+            setSummaryMap({});
+            setSummaryRootTotal(null);
+            setSummaryPropertyName('All properties');
+            setShowSummaryModal(true);
+        }
+    };
+
+    // Build a parent-first ordered list from the tree, include depth for indentation
+    const buildOrderedSummaryList = (nodes, map, depth = 0, out = []) => {
+        if (!Array.isArray(nodes) || nodes.length === 0) return out;
+        nodes.forEach((n) => {
+            if (n && n.id && map && map[n.id]) {
+                out.push({ id: n.id, depth, ...map[n.id] });
+            }
+            if (Array.isArray(n.children) && n.children.length > 0) {
+                buildOrderedSummaryList(n.children, map, depth + 1, out);
+            }
+        });
+        return out;
+    };
+
     return (
         <View style={AppStyles.screen}>
             <StatusBar barStyle="dark-content" />
@@ -363,7 +540,20 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
             )}
             <View style={AppStyles.header}>
                 <View style={AppStyles.headerFlex}>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 1 }}>
+                    <ScrollView
+                        ref={breadcrumbScrollRef}
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        style={{ flexGrow: 1 }}
+                        contentContainerStyle={{ paddingRight: 20 }} // leave space so last crumb isn't covered by buttons
+                        onContentSizeChange={(w, h) => setBreadcrumbContentWidth(w)}
+                        onLayout={(e) => setBreadcrumbViewWidth(e.nativeEvent.layout.width)}
+                        onScroll={({ nativeEvent }) => {
+                            setBreadcrumbScrollX(nativeEvent.contentOffset?.x || 0);
+                        }}
+                        scrollEventThrottle={16}
+                        {...(Platform.OS === 'web' ? { onWheel: handleBreadcrumbWheel } : {})}
+                    >
                         {breadcrumbs.map((crumb, index) => {
                             // ...existing code...
                             const actualItem = crumb.name !== 'Objecten' ? findItemByPath(objectsHierarchy, crumb.path) : null;
@@ -405,15 +595,39 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                             );
                         })}
                     </ScrollView>
+                    {/* Breadcrumb scrollbar: show when content overflows */}
+                    {breadcrumbContentWidth > breadcrumbViewWidth && (
+                        <View style={{ position: 'absolute', left: 8, right: 8 + 48 /* space for buttons */, bottom: -6, height: 4, borderRadius: 2, backgroundColor: 'rgba(0,0,0,0.06)', overflow: 'hidden', pointerEvents: 'none' }}>
+                            {(() => {
+                                const ratio = Math.min(1, breadcrumbViewWidth / breadcrumbContentWidth || 1);
+                                const indicatorWidth = Math.max(24, (breadcrumbViewWidth - 16) * ratio);
+                                const maxScroll = Math.max(1, breadcrumbContentWidth - breadcrumbViewWidth);
+                                const scrollFraction = Math.min(1, breadcrumbScrollX / maxScroll || 0);
+                                const available = (breadcrumbViewWidth - 16) - indicatorWidth;
+                                const left = 8 + (available * scrollFraction);
+                                return (
+                                    <View style={{ position: 'absolute', left: left, width: indicatorWidth, height: 4, borderRadius: 2, backgroundColor: 'rgba(0,0,0,0.14)' }} />
+                                );
+                            })()}
+                        </View>
+                    )}
                     <TouchableOpacity 
                         onPress={() => {
                             console.log('[LogoutButton] Logout button pressed in HierarchicalObjectsScreen');
                             handleLogout();
                         }} 
-                        style={{ padding: 8, backgroundColor: 'transparent', borderRadius: 6 }}
+                        style={{ padding: 8, marginLeft: 16, backgroundColor: 'transparent', borderRadius: 6 }}
                         activeOpacity={0.7}
                     >
                         <LogOut color={colors.blue600} size={24} />
+                    </TouchableOpacity>
+                    {/* Summary button (temporary, aggregates all properties) */}
+                    <TouchableOpacity
+                        onPress={() => openSummaryAll()}
+                        style={{ padding: 8, marginLeft: 8, backgroundColor: 'transparent', borderRadius: 6 }}
+                        activeOpacity={0.7}
+                    >
+                        <Calculator color={colors.blue600} size={22} />
                     </TouchableOpacity>
                 </View>
             </View>
@@ -924,6 +1138,62 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                     setTimeout(() => setShowAddFormuleModal(true), 0);
                 }}
             />
+
+            {/* Summary Modal (temporary, not persisted) */}
+            <Modal
+                transparent
+                visible={showSummaryModal}
+                onRequestClose={() => setShowSummaryModal(false)}
+            >
+                <TouchableOpacity
+                    activeOpacity={1}
+                    onPress={() => setShowSummaryModal(false)}
+                    style={AppStyles.modalOverlay}
+                >
+                    <View style={[AppStyles.modalContainer, { maxWidth: 640, width: '92%', padding: 16 }]}> 
+                        <Text style={AppStyles.modalTitle}>Samenvatting — {summaryPropertyName}</Text>
+                        <Text style={{ color: colors.lightGray600, marginTop: 6 }}>Tijdelijke berekening (niet opgeslagen)</Text>
+                        <View style={{ marginTop: 12, maxHeight: 360 }}>
+                            <ScrollView>
+                                <View style={{ paddingVertical: 4 }}>
+                                    <Text style={{ fontWeight: '700', marginBottom: 6 }}>Totaal (root):</Text>
+                                    {summaryRootTotal && Object.keys(summaryRootTotal).length > 0 ? (
+                                        Object.keys(summaryRootTotal).map((pn) => (
+                                            <Text key={`root-${pn}`} style={{ color: colors.lightGray700 }}>{pn}: {summaryRootTotal[pn]}</Text>
+                                        ))
+                                    ) : (
+                                        <Text style={{ color: colors.lightGray600 }}>—</Text>
+                                    )}
+                                    {Object.keys(summaryMap).length === 0 ? (
+                                        <Text style={{ color: colors.lightGray600, marginTop: 8 }}>Geen waarden gevonden.</Text>
+                                    ) : (
+                                        (() => {
+                                            const ordered = buildOrderedSummaryList(objectsHierarchy || [], summaryMap);
+                                            return ordered.map((s) => (
+                                                <View key={`sum-${s.id}`} style={{ paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: colors.lightGray200 }}>
+                                                    <Text style={{ fontWeight: '600', marginLeft: s.depth * 12 }}>{s.name}</Text>
+                                                    {s.props && Object.keys(s.props).length > 0 ? (
+                                                        Object.keys(s.props).map((pn) => (
+                                                            <Text key={`prop-${s.id}-${pn}`} style={{ color: colors.lightGray700, marginTop: 2, marginLeft: s.depth * 12 }}>{pn} — Eigenschap: {s.props[pn].count || 0} • Waarde: {s.props[pn].total}</Text>
+                                                        ))
+                                                    ) : (
+                                                        <Text style={{ color: colors.lightGray600, marginTop: 2, marginLeft: s.depth * 12 }}>Geen eigenschappen</Text>
+                                                    )}
+                                                </View>
+                                            ));
+                                        })()
+                                    )}
+                                </View>
+                            </ScrollView>
+                        </View>
+                        <View style={[AppStyles.modalActions, { marginTop: 12, justifyContent: 'flex-end' }]}>
+                            <TouchableOpacity onPress={() => { setShowSummaryModal(false); }} style={AppStyles.btnPrimary}>
+                                <Text style={AppStyles.btnPrimaryText}>Sluiten</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </TouchableOpacity>
+            </Modal>
 
         </View>
     );
