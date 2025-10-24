@@ -515,6 +515,8 @@ const AppStyles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         padding: 16,
+        // Ensure overlay doesn't force a pointer cursor on web
+        cursor: Platform.OS === 'web' ? 'default' : undefined,
     },
     modalContent: {
         backgroundColor: 'white',
