@@ -1,6 +1,6 @@
 import { ArrowRight, Boxes, Calculator, Filter, GitBranch, LogOut, Menu, Plus, Recycle, Square } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, FlatList, Modal, Platform, RefreshControl, ScrollView, StatusBar, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Modal, Platform, RefreshControl, ScrollView, StatusBar, Text, TouchableOpacity, View } from 'react-native';
 import HierarchicalObjectsSkeletonList from '../../../components/HierarchicalObjectsSkeletonList';
 import { fetchFormules as fetchFormulesApi, linkObjects } from '../api';
 import AppStyles, { colors } from '../AppStyles';
@@ -8,6 +8,7 @@ import AddFormuleModal from '../components/modals/AddFormuleModal';
 import AddObjectModal from '../components/modals/AddObjectModal';
 import FilterModal from '../components/modals/FilterModal';
 import FormulePickerModal from '../components/modals/FormulePickerModal';
+import SummaryModal from '../components/modals/SummaryModal';
 import { supabase } from '../config/config';
 
 const PropertyButton = ({ onClick }) => (
@@ -98,7 +99,7 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
         setLocalObjectsHierarchy(objectsHierarchy || []);
     }, [objectsHierarchy]);
 
-    // Build grouped left-column data (preserve order, create separators for grouped items)
+    // Build grouped data (preserve encounter order, create separators for grouped items)
     const buildGroupedList = (items) => {
         if (!Array.isArray(items)) return [];
         const acc = {};
@@ -145,7 +146,60 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
         return out;
     };
 
-    const leftListData = useMemo(() => buildGroupedList(localObjectsHierarchy), [localObjectsHierarchy, summaryMap]);
+    // Build grouped data but sort groups to match on-screen card order (by earliest created/updated timestamp in each group)
+    const buildGroupedListSorted = (items) => {
+        if (!Array.isArray(items)) return [];
+        // First, group items by group_key or solo id
+        const groups = Object.values(
+            (items || []).reduce((acc, it) => {
+                const key = it.group_key ? `grp:${it.group_key}` : `solo:${it.id}`;
+                if (!acc[key]) acc[key] = { group_key: it.group_key || null, items: [] };
+                acc[key].items.push(it);
+                return acc;
+            }, {})
+        )
+            .map((group) => {
+                const times = group.items
+                    .map((it) => new Date(it.created_at || it.updated_at || Date.now()).getTime())
+                    .filter((t) => Number.isFinite(t));
+                const sortKey = times.length ? Math.min(...times) : Number.MAX_SAFE_INTEGER;
+                return { ...group, sortKey };
+            })
+            .sort((a, b) => a.sortKey - b.sortKey);
+
+        const out = [];
+        groups.forEach((group) => {
+            const isGrouped = !!group.group_key && group.items.length > 1;
+            if (isGrouped) {
+                const propSet = new Set();
+                group.items.forEach((it) => {
+                    const props = it.properties || it.eigenschappen || [];
+                    props.forEach((p) => {
+                        const pname = p.name || p.property_name || p.propertyName || p.naam || p.label || p.key;
+                        if (pname) propSet.add(String(pname));
+                    });
+                    const s = summaryMap && summaryMap[it.id] && summaryMap[it.id].props ? summaryMap[it.id].props : null;
+                    if (s) Object.keys(s).forEach((k) => propSet.add(String(k)));
+                });
+                const groupProps = Array.from(propSet);
+                const anchorId = group.items[0]?.id;
+                out.push({ type: 'sep', id: `sep-top-${group.group_key}` });
+                group.items.forEach((it, idx) => out.push({ type: 'group-member', item: it, group_key: group.group_key, idx, groupProps, anchorId }));
+                out.push({ type: 'sep', id: `sep-bottom-${group.group_key}` });
+            } else {
+                const solo = group.items[0];
+                const soloProps = (solo.properties || solo.eigenschappen || [])
+                    .map(p => p.name || p.property_name || p.propertyName || p.naam || p.label || p.key)
+                    .filter(Boolean);
+                const s = summaryMap && summaryMap[solo.id] && summaryMap[solo.id].props ? Object.keys(summaryMap[solo.id].props) : [];
+                const combinedSolo = Array.from(new Set([...soloProps, ...s]));
+                out.push({ type: 'solo', item: solo, soloProps: combinedSolo, anchorId: solo.id });
+            }
+        });
+        return out;
+    };
+
+    const leftListData = useMemo(() => buildGroupedListSorted(localObjectsHierarchy), [localObjectsHierarchy, summaryMap]);
     // Track how user navigated into the current level to influence breadcrumb labels
     const selectionContextRef = useRef({ pathKey: '', preferSoloLabel: false });
     // Ref for the breadcrumb ScrollView so we can auto-scroll to show the current crumb
@@ -1348,393 +1402,40 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                     setTimeout(() => setShowAddFormuleModal(true), 0);
                 }}
             />
-
-            {/* Summary Modal (temporary, not persisted) */}
-            <Modal
-                transparent
+            <SummaryModal
                 visible={showSummaryModal}
-                // Do not auto-close on hardware back; only close when user presses the explicit 'Sluiten' button
-                onRequestClose={() => {}}
-            >
-                <TouchableOpacity
-                    activeOpacity={1}
-                    // Prevent closing when tapping overlay; only close via 'Sluiten' buttons inside modal
-                    onPress={() => {}}
-                    style={AppStyles.modalOverlay}
-                >
-                    <View style={[AppStyles.modalContainer, { maxWidth: 900, width: '96%', padding: 12 }]}> 
-                        <Text style={AppStyles.modalTitle}>Samenvatting — {summaryPropertyName}</Text>
-                        <Text style={{ color: colors.lightGray600, marginTop: 6 }}>Tijdelijke berekening (niet opgeslagen)</Text>
-                        <View style={{ marginTop: 12, maxHeight: 520, flexDirection: 'row', gap: 12 }}>
-                            {/* Left column: top-level parents list */}
-                            <View style={{ width: '40%', borderRightWidth: 1, borderRightColor: colors.lightGray200, paddingRight: 12 }}>
-                                <Text style={{ fontWeight: '700', marginBottom: 8 }}>Top-level objecten</Text>
-                                {Array.isArray(localObjectsHierarchy) && localObjectsHierarchy.length > 0 ? (
-                                    <FlatList
-                                        data={leftListData.slice(0, leftPage * leftPageSize)}
-                                        keyExtractor={(item, idx) => item.type === 'sep' ? item.id : (item.item?.id || `${item.type}-${idx}`)}
-                                        renderItem={({ item }) => {
-                                            if (item.type === 'sep') {
-                                                return <View key={item.id} style={{ height: 1, backgroundColor: colors.lightGray200, marginVertical: 6 }} />;
-                                            }
-                                                if (item.type === 'group-member') {
-                                                    const n = item.item;
-                                                    const entry = summaryMap && summaryMap[n.id];
-                                                    const propCount = (item.groupProps && item.groupProps.length) ? item.groupProps.length : (entry && entry.props ? Object.keys(entry.props).length : 0);
-                                                    const anchor = item.anchorId || n.id;
-                                                    return (
-                                                        <TouchableOpacity
-                                                            key={`parent-group-${n.id}`}
-                                                            onPress={() => {
-                                                                // When a grouped parent is pressed, select the group's anchor and set the group key; member names are computed by effect
-                                                                setSelectedSummaryParentId(anchor);
-                                                                setSelectedParentStack([anchor]);
-                                                                setSelectedGroupKey(item.group_key || null);
-                                                                setPressedGroupKey(item.group_key || null);
-                                                            }}
-                                                            style={[AppStyles.card, AppStyles.cardGroupMember, { marginBottom: 6 }]}
-                                                        >
-                                                            <View style={AppStyles.cardFlex}>
-                                                                <View style={AppStyles.cardContent}>
-                                                                    <Text style={AppStyles.cardTitle}>{n.naam}</Text>
-                                                                    <Text style={AppStyles.cardSubtitle}>{propCount} eigenschappen</Text>
-                                                                </View>
-                                                            
-                                                            </View>
-                                                        </TouchableOpacity>
-                                                    );
-                                                }
-                                            // solo
-                                            const n = item.item;
-                                            const entry = summaryMap && summaryMap[n.id];
-                                            const propCount = (item.soloProps && item.soloProps.length) ? item.soloProps.length : (entry && entry.props ? Object.keys(entry.props).length : 0);
-                                            return (
-                                                <TouchableOpacity
-                                                    key={`parent-solo-${n.id}`}
-                                                    onPress={() => { setSelectedSummaryParentId(n.id); setSelectedParentStack([n.id]); setSelectedGroupKey(null); setSelectedGroupMembers([]); setPressedGroupKey(null); }}
-                                                    style={[AppStyles.card, { marginBottom: 8 }]}
-                                                >
-                                                    <View style={AppStyles.cardFlex}>
-                                                        <View style={AppStyles.cardContent}>
-                                                            <Text style={AppStyles.cardTitle}>{n.naam}</Text>
-                                                            <Text style={AppStyles.cardSubtitle}>{propCount} eigenschappen</Text>
-                                                        </View>
-                                                    
-                                                        
-                                                    </View>
-                                                </TouchableOpacity>
-                                            );
-                                        }}
-                                        ListFooterComponent={() => (
-                                            leftListData.length > leftPage * leftPageSize ? (
-                                                <TouchableOpacity onPress={() => setLeftPage((p) => p + 1)} style={{ padding: 10, alignItems: 'center' }}>
-                                                    <Text style={{ color: colors.blue600 }}>Load more</Text>
-                                                </TouchableOpacity>
-                                            ) : null
-                                        )}
-                                    />
-                                ) : (
-                                    <Text style={{ color: colors.lightGray600 }}>Geen objecten</Text>
-                                )}
-                            </View>
-
-                            {/* Right column: drill-down view */}
-                            <View style={{ flex: 1, paddingLeft: 12 }}>
-                                {(!selectedSummaryParentId && selectedParentStack.length === 0) ? (
-                                    // Root view: show root totals and top-level overview
-                                    <ScrollView>
-                                        <View style={{ borderWidth: 1, borderColor: colors.lightGray200, borderRadius: 10, padding: 10, backgroundColor: '#fff' }}>
-                                            <Text style={{ fontWeight: '700', marginBottom: 8 }}>Totaal (root):</Text>
-                                            {summaryRootTotal && Object.keys(summaryRootTotal).length > 0 ? (
-                                                Object.keys(summaryRootTotal).map((pn) => (
-                                                    <Text key={`root-${pn}`} style={{ color: colors.lightGray700 }}>{pn}: {summaryRootTotal[pn]}</Text>
-                                                ))
-                                            ) : (
-                                                <Text style={{ color: colors.lightGray600 }}>—</Text>
-                                            )}
-                                        </View>
-
-                                        <View style={{ marginTop: 12 }}>
-                                            <Text style={{ color: colors.lightGray600 }}>Selecteer een top-level object aan de linkerkant om sub-items te bekijken.</Text>
-                                        </View>
-                                    </ScrollView>
-                                ) : (
-                                    // Drill-down view: show breadcrumb and immediate children vertically
-                                    (() => {
-                                        const currentId = selectedParentStack[selectedParentStack.length - 1] || selectedSummaryParentId;
-                                        const currentNode = findNodeById(currentId, localObjectsHierarchy || objectsHierarchy);
-                                        const currentEntry = summaryMap && summaryMap[currentId];
-                                        return (
-                                            <View style={{ flex: 1 }}>
-                                                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                                                    <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
-                                                            {/* Back button removed per request */}
-                                                            <View style={{ marginLeft: 8, flex: 1, minWidth: 0 }}>
-                                                                {/* Descendants row only (breadcrumb chips removed) */}
-                                                                {(() => {
-                                                                    const pathIds = (Array.isArray(selectedParentStack) && selectedParentStack.length > 0)
-                                                                        ? selectedParentStack
-                                                                        : (selectedSummaryParentId ? [selectedSummaryParentId] : []);
-                                                                    // Ancestors = all pathIds except the current node
-                                                                    const ancestors = (pathIds && pathIds.length > 1) ? pathIds.slice(0, -1) : [];
-                                                                    if ((!expandedCrumbId || !expandedDescendants || expandedDescendants.length === 0) && ancestors.length === 0) {
-                                                                        // nothing to render
-                                                                        return null;
-                                                                    }
-
-                                                                    return (
-                                                                        <>
-                                                                            {/* Ancestors row (non-interactive chips showing objects that came before) */}
-                                                                            {/* Single combined row: ancestors, current preview, then descendants */}
-                                                                            <ScrollView horizontal showsHorizontalScrollIndicator={true} contentContainerStyle={{ alignItems: 'center', paddingVertical: 8 }} onWheel={Platform.OS === 'web' ? handleBreadcrumbWheel : undefined}>
-                                                                                {(() => {
-                                                                                    const parts = [];
-                                                                                    // push ancestors
-                                                                                    ancestors.forEach((id) => {
-                                                                                        const node = findNodeById(id, localObjectsHierarchy || objectsHierarchy);
-                                                                                        parts.push({ type: 'ancestor', node });
-                                                                                    });
-                                                                                    // push current
-                                                                                    if (currentNode) parts.push({ type: 'current', node: currentNode });
-                                                                                    // push descendants
-                                                                                    if (expandedDescendants && expandedDescendants.length) {
-                                                                                        expandedDescendants.forEach((it) => parts.push({ type: 'descendant', node: it.node, path: it.path }));
-                                                                                    }
-                                                                                    return parts.map((p, idx) => {
-                                                                                        const isLast = idx === parts.length - 1;
-                                                                                        if (p.type === 'ancestor') {
-                                                                                            const ai = pathIds.findIndex((pid) => pid === p.node?.id);
-                                                                                            const node = p.node;
-                                                                                            const isGrouped = node && node.group_key;
-                                                                                            const isActive = isGrouped && pressedGroupKey && pressedGroupKey === node.group_key;
-                                                                                            // preview text for grouped nodes
-                                                                                            let label = node ? node.naam : 'Onbekend';
-                                                                                            if (isGrouped) {
-                                                                                                const parentContext = (pathIds && pathIds.length > 1) ? pathIds[pathIds.length - 2] : null;
-                                                                                                const members = getGroupMemberNames(node.group_key, parentContext) || [];
-                                                                                                if (members.length > 1) {
-                                                                                                    const first = members[0] || node.naam;
-                                                                                                    const second = members[1] || '';
-                                                                                                    const half = Math.ceil((second || '').length / 2) || 0;
-                                                                                                    const secondShort = second.slice(0, half);
-                                                                                                    label = `${first}+${secondShort}…`;
-                                                                                                } else if (members.length === 1) {
-                                                                                                    label = members[0];
-                                                                                                }
-                                                                                            }
-                                                                                            return (
-                                                                                                <TouchableOpacity key={`part-ancestor-${node?.id || idx}`} onPress={() => {
-                                                                                                    const next = pathIds.slice(0, (ai >= 0 ? ai : idx) + 1);
-                                                                                                    setSelectedParentStack(next);
-                                                                                                    const newCurrent = next[next.length - 1];
-                                                                                                    setSelectedSummaryParentId(newCurrent);
-                                                                                                    const parentNode = findNodeById(newCurrent, localObjectsHierarchy || objectsHierarchy);
-                                                                                                    if (parentNode && parentNode.group_key) {
-                                                                                                        setSelectedGroupKey(parentNode.group_key);
-                                                                                                        setPressedGroupKey(parentNode.group_key);
-                                                                                                    } else {
-                                                                                                        setSelectedGroupKey(null);
-                                                                                                        setPressedGroupKey(null);
-                                                                                                    }
-                                                                                                    setExpandedCrumbId(null);
-                                                                                                }} style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                                                                                    <View style={{ paddingVertical: 4, paddingHorizontal: 6 }}>
-                                                                                                        <Text numberOfLines={1} ellipsizeMode={'tail'} style={{ fontWeight: '600', color: isActive ? colors.blue600 : colors.lightGray700 }}>{label}</Text>
-                                                                                                    </View>
-                                                                                                    {!isLast && (
-                                                                                                        <ArrowRight color={colors.lightGray500} size={12} style={{ marginHorizontal: 6 }} />
-                                                                                                    )}
-                                                                                                </TouchableOpacity>
-                                                                                            );
-                                                                                        }
-                                                                                        if (p.type === 'current') {
-                                                                                            // compute preview text similar to before
-                            const node = p.node;
-                            let previewText = node ? node.naam : 'Onbekend';
-                            const isGroupedCurrent = node && node.group_key;
-                            if (isGroupedCurrent) {
-                                const parentContext = (pathIds && pathIds.length > 1) ? pathIds[pathIds.length - 2] : null;
-                                const members = getGroupMemberNames(node.group_key, parentContext) || [];
-                                if (members.length > 1) {
-                                    const first = members[0] || node.naam;
-                                    const second = members[1] || '';
-                                    const half = Math.ceil((second || '').length / 2) || 0;
-                                    const secondShort = second.slice(0, half);
-                                    previewText = `${first}+${secondShort}…`;
-                                } else if (members.length === 1) {
-                                    previewText = members[0];
-                                }
-                            }
-                            const isActiveCurrent = isGroupedCurrent && pressedGroupKey && pressedGroupKey === node.group_key;
-                            return (
-                                <View key={`part-current-${node?.id || idx}`} style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                    <TouchableOpacity onPress={() => {
-                                        // Activate group preview for current node (do not change selection)
-                                        if (isGroupedCurrent) {
-                                            setSelectedGroupKey(node.group_key);
-                                            setPressedGroupKey(node.group_key);
-                                        }
-                                        // collapse descendants view
-                                        setExpandedCrumbId(null);
-                                    }} style={{ paddingVertical: 4, paddingHorizontal: 6 }}>
-                                        <Text numberOfLines={1} ellipsizeMode={'tail'} style={{ fontWeight: '700', color: isActiveCurrent ? colors.blue600 : colors.lightGray900 }}>{previewText}</Text>
-                                    </TouchableOpacity>
-                                    {!isLast && (
-                                        <ArrowRight color={colors.lightGray500} size={12} style={{ marginHorizontal: 6 }} />
-                                    )}
-                                </View>
-                            );
-                                                                                        }
-                                                                                        // descendant
-                                                                                        const dnode = p.node;
-                                                                                        const isGroupedDesc = dnode && dnode.group_key;
-                                                                                        const isActiveDesc = isGroupedDesc && pressedGroupKey && pressedGroupKey === dnode.group_key;
-                                                                                        let dlabel = dnode ? dnode.naam : 'Onbekend';
-                                                                                        if (isGroupedDesc) {
-                                                                                            const parentContext = (pathIds && pathIds.length > 1) ? pathIds[pathIds.length - 2] : null;
-                                                                                            const members = getGroupMemberNames(dnode.group_key, parentContext) || [];
-                                                                                            if (members.length > 1) {
-                                                                                                const first = members[0] || dnode.naam;
-                                                                                                const second = members[1] || '';
-                                                                                                const half = Math.ceil((second || '').length / 2) || 0;
-                                                                                                const secondShort = second.slice(0, half);
-                                                                                                dlabel = `${first}+${secondShort}…`;
-                                                                                            } else if (members.length === 1) {
-                                                                                                dlabel = members[0];
-                                                                                            }
-                                                                                        }
-                                                                                        return (
-                                                                                            <View key={`part-desc-${dnode?.id || idx}`} style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                                                                                <TouchableOpacity onPress={() => {
-                                                                                                    const crumbIndex = pathIds.findIndex(pid => pid === expandedCrumbId);
-                                                                                                    const base = pathIds.slice(0, crumbIndex + 1);
-                                                                                                    const nextStack = [...base, ...p.path];
-                                                                                                    setSelectedParentStack(nextStack);
-                                                                                                    setSelectedSummaryParentId(nextStack[nextStack.length - 1]);
-                                                                                                    const targetNode = p.node;
-                                                                                                    if (targetNode && targetNode.group_key) { setSelectedGroupKey(targetNode.group_key); setPressedGroupKey(targetNode.group_key); } else { setSelectedGroupKey(null); setPressedGroupKey(null); }
-                                                                                                    setExpandedCrumbId(null);
-                                                                                                }} style={{ paddingVertical: 4, paddingHorizontal: 6 }}>
-                                                                                                    <Text numberOfLines={1} ellipsizeMode={'tail'} style={{ fontWeight: '600', color: isActiveDesc ? colors.blue600 : colors.lightGray700 }}>{dlabel}</Text>
-                                                                                                </TouchableOpacity>
-                                                                                                {!isLast && (
-                                                                                                    <ArrowRight color={colors.lightGray500} size={12} style={{ marginHorizontal: 6 }} />
-                                                                                                )}
-                                                                                            </View>
-                                                                                        );
-                                                                                    });
-                                                                                })()}
-                                                                            </ScrollView>
-                                                                        </>
-                                                                    );
-                                                                })()}
-                                                            </View>
-                                                        </View>
-                                                </View>
-
-                                                <View style={{ borderRadius: 12, padding: 12, backgroundColor: '#fff', marginBottom: 10, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 4 }}>
-                                                    <Text style={{ fontWeight: '700', fontSize: 16 }}>{(selectedGroupMembers && selectedGroupMembers.length > 0) ? selectedGroupMembers.join(' + ') : (currentNode ? currentNode.naam : 'Geselecteerd')}</Text>
-                                                    <Text style={{ color: colors.lightGray600, marginTop: 4 }}>Aggregated eigenschappen</Text>
-                                                    <View style={{ marginTop: 10 }}>
-                                                        {currentEntry && currentEntry.props && Object.keys(currentEntry.props).length > 0 ? (
-                                                            Object.keys(currentEntry.props).map((pn) => (
-                                                                <View key={`pdet-${pn}`} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 6 }}>
-                                                                    <Text style={{ color: colors.lightGray700 }}>{pn}</Text>
-                                                                    <Text style={{ color: colors.lightGray900, fontWeight: '700' }}>{currentEntry.props[pn].total} <Text style={{ color: colors.lightGray600, fontWeight: '400' }}>({currentEntry.props[pn].count})</Text></Text>
-                                                                </View>
-                                                            ))
-                                                        ) : (
-                                                            <Text style={{ color: colors.lightGray600, marginTop: 6 }}>Geen eigenschappen</Text>
-                                                        )}
-                                                    </View>
-                                                </View>
-
-                                                <View style={{ flex: 1 }}>
-                                                    <Text style={{ fontWeight: '700', marginBottom: 8 }}>Sub-items</Text>
-                                                    {currentNode && Array.isArray(currentNode.children) && currentNode.children.length > 0 ? (
-                                                        <FlatList
-                                                            style={{ flex: 1 }}
-                                                            contentContainerStyle={{ paddingBottom: 12 }}
-                                                            data={buildGroupedList(currentNode.children).slice(0, rightPage * rightPageSize)}
-                                                            keyExtractor={(item, idx) => item.type === 'sep' ? item.id : (item.item?.id || `${item.type}-${idx}`)}
-                                                            renderItem={({ item }) => {
-                                                                if (item.type === 'sep') return <View key={item.id} style={{ height: 1, backgroundColor: colors.lightGray200, marginVertical: 6 }} />;
-                                                                if (item.type === 'group-member') {
-                                                                    const ch = item.item;
-                                                                    const chEntry = summaryMap && summaryMap[ch.id];
-                                                                    const propCount = (item.groupProps && item.groupProps.length) ? item.groupProps.length : (chEntry && chEntry.props ? Object.keys(chEntry.props).length : 0);
-                                                                        return (
-                                                                        <TouchableOpacity key={`child-${ch.id}`} onPress={() => {
-                                                                            const anchor = item.anchorId || ch.id;
-                                                                            // When pressing a grouped child, select the group's anchor and set the group key; member names are computed by effect
-                                                                            setSelectedParentStack((prev) => [...(prev || []), anchor]);
-                                                                            setSelectedSummaryParentId(anchor);
-                                                                            setSelectedGroupKey(item.group_key || null);
-                                                                            setPressedGroupKey(item.group_key || null);
-                                                                        }} style={[AppStyles.card, AppStyles.cardGroupMember, { marginBottom: 6, flexDirection: 'row', alignItems: 'center' }]}>
-                                                                            {/* left accent */}
-                                                                            {/* left accent removed */}
-                                                                            <View style={{ flex: 1 }}>
-                                                                                <View style={AppStyles.cardFlex}>
-                                                                                    <View style={AppStyles.cardContent}>
-                                                                                        <Text style={AppStyles.cardTitle}>{ch.naam}</Text>
-                                                                                        <Text style={AppStyles.cardSubtitle}>{propCount} eigenschappen</Text>
-                                                                                    </View>
-                                                                                </View>
-                                                                            </View>
-                                                                            
-                                                                        </TouchableOpacity>
-                                                                    );
-                                                                }
-                                                                // solo child
-                                                                const ch = item.item;
-                                                                const chEntry = summaryMap && summaryMap[ch.id];
-                                                                const propCount = (item.soloProps && item.soloProps.length) ? item.soloProps.length : (chEntry && chEntry.props ? Object.keys(chEntry.props).length : 0);
-                                                                return (
-                                                                    <TouchableOpacity key={`child-${ch.id}`} onPress={() => {
-                                                                        // Navigating into a solo child: clear any active group selection so header shows the solo name
-                                                                        setSelectedGroupKey(null);
-                                                                        setSelectedGroupMembers([]);
-                                                                        setPressedGroupKey(null);
-                                                                        setSelectedParentStack((prev) => [...(prev || []), ch.id]);
-                                                                        setSelectedSummaryParentId(ch.id);
-                                                                    }} style={[AppStyles.card, { marginBottom: 8 }]}> 
-                                                                        <View style={AppStyles.cardFlex}>
-                                                                            <View style={AppStyles.cardContent}>
-                                                                                <Text style={AppStyles.cardTitle}>{ch.naam}</Text>
-                                                                                <Text style={AppStyles.cardSubtitle}>{propCount} eigenschappen</Text>
-                                                                            </View>
-                                                                            {/* divider removed */}
-                                                                        </View>
-                                                                    </TouchableOpacity>
-                                                                );
-                                                            }}
-                                                            ListFooterComponent={() => (
-                                                                currentNode.children.length > rightPage * rightPageSize ? (
-                                                                    <TouchableOpacity onPress={() => setRightPage((p) => p + 1)} style={{ padding: 10, alignItems: 'center' }}>
-                                                                        <Text style={{ color: colors.blue600 }}>Load more</Text>
-                                                                    </TouchableOpacity>
-                                                                ) : null
-                                                            )}
-                                                        />
-                                                    ) : (
-                                                        <Text style={{ color: colors.lightGray600 }}>Geen sub-items</Text>
-                                                    )}
-                                                </View>
-                                            </View>
-                                        );
-                                    })()
-                                )}
-                            </View>
-                        </View>
-                        <View style={[AppStyles.modalActions, { marginTop: 12, justifyContent: 'flex-end' }]}> 
-                            <TouchableOpacity onPress={() => { closeSummaryModal(); }} style={AppStyles.btnPrimary}>
-                                <Text style={AppStyles.btnPrimaryText}>Sluiten</Text>
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-                </TouchableOpacity>
-            </Modal>
+                onClose={closeSummaryModal}
+                summaryPropertyName={summaryPropertyName}
+                summaryMap={summaryMap}
+                summaryRootTotal={summaryRootTotal}
+                leftListData={leftListData}
+                leftPage={leftPage}
+                leftPageSize={leftPageSize}
+                setLeftPage={setLeftPage}
+                localObjectsHierarchy={localObjectsHierarchy}
+                objectsHierarchy={objectsHierarchy}
+                selectedSummaryParentId={selectedSummaryParentId}
+                selectedParentStack={selectedParentStack}
+                setSelectedSummaryParentId={setSelectedSummaryParentId}
+                setSelectedParentStack={setSelectedParentStack}
+                setSelectedGroupKey={setSelectedGroupKey}
+                setSelectedGroupMembers={setSelectedGroupMembers}
+                setPressedGroupKey={setPressedGroupKey}
+                selectedGroupMembers={selectedGroupMembers}
+                pressedGroupKey={pressedGroupKey}
+                expandedCrumbId={expandedCrumbId}
+                setExpandedCrumbId={setExpandedCrumbId}
+                expandedDescendants={expandedDescendants}
+                handleBreadcrumbWheel={handleBreadcrumbWheel}
+                getGroupMemberNames={getGroupMemberNames}
+                findNodeById={findNodeById}
+                buildGroupedList={buildGroupedList}
+                rightPage={rightPage}
+                rightPageSize={rightPageSize}
+                setRightPage={setRightPage}
+                setSelectedProperty={setSelectedProperty}
+                setCurrentScreen={setCurrentScreen}
+            />
 
         </View>
     );
