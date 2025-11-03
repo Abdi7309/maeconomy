@@ -602,6 +602,7 @@ const AppStyles = StyleSheet.create({
         color: colors.blue600,
         fontSize: 0.875 * 16,
         fontWeight: '600',
+        marginTop: -54,
         textDecorationLine: 'underline',
     },
 

@@ -326,7 +326,7 @@ const SummaryModal = (props) => {
                                         }
 
                                         return (
-                                            <View style={{ marginTop: 0, marginBottom: 4, paddingVertical: 0 }}>
+                                            <View style={{ marginTop: -20, marginBottom: 4, paddingVertical: 0 }}>
                                                 <ScrollView
                                                     ref={breadcrumbScrollRef}
                                                     horizontal

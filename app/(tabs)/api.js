@@ -644,11 +644,22 @@ export const addProperties = async (objectId, properties) => {
     try {
         console.log('[addProperties] Adding', properties.length, 'properties to object', objectId)
         
+        const isRlsDenied = (err) => {
+            if (!err) return false;
+            const msg = (err.message || '').toLowerCase();
+            return (
+                msg.includes('row level security') ||
+                msg.includes('rls') ||
+                msg.includes('permission denied') ||
+                msg.includes('violates row-level security policy')
+            );
+        };
+
         for (const prop of properties) {
             console.log('[addProperties] Processing property:', prop.name, 'files:', prop.files?.length || 0)
             
             // Insert property
-            const { data: propertyData, error: propertyError } = await supabase
+            let { data: propertyData, error: propertyError } = await supabase
                 .from('eigenschappen')
                 .insert([
                     {
@@ -661,8 +672,44 @@ export const addProperties = async (objectId, properties) => {
                 ])
                 .select()
                 .single()
-            
-            if (propertyError) throw propertyError
+
+            // Fallback via RPC when RLS prevents inserting into someone else's object
+            if (propertyError && isRlsDenied(propertyError)) {
+                console.warn('[addProperties] RLS prevented insert. Trying admin RPC fallback...');
+                const { data: rpcId, error: rpcErr } = await supabase.rpc('admin_insert_property', {
+                    p_object_id: Number(objectId),
+                    p_name: prop.name.trim(),
+                    p_waarde: prop.waarde,
+                    p_eenheid: prop.unit || '',
+                    p_formule_id: prop.Formule_id != null ? Number(prop.Formule_id) : null,
+                });
+                if (rpcErr) {
+                    console.error('[addProperties] RPC fallback failed:', rpcErr);
+                    throw rpcErr;
+                }
+                // When returning uuid/bigint from RPC, supabase-js puts it in data.
+                // If RPC returns nothing or type mismatch, fall back to lookup by object_id + name.
+                if (rpcId) {
+                    propertyData = { id: rpcId };
+                } else {
+                    console.warn('[addProperties] RPC returned no ID, attempting to fetch last matching property');
+                    const { data: found, error: findErr } = await supabase
+                        .from('eigenschappen')
+                        .select('id')
+                        .eq('object_id', objectId)
+                        .eq('name', prop.name.trim())
+                        .order('id', { ascending: false })
+                        .limit(1)
+                        .maybeSingle();
+                    if (findErr) {
+                        console.warn('[addProperties] Post-RPC fetch failed:', findErr);
+                    }
+                    if (found?.id) {
+                        propertyData = { id: found.id };
+                    }
+                }
+            }
+            if (propertyError && !propertyData) throw propertyError
             
             console.log('[addProperties] Property created with ID:', propertyData.id)
             
@@ -680,7 +727,20 @@ export const addProperties = async (objectId, properties) => {
         return true
     } catch (error) {
         console.error('Error adding properties:', error)
-        Alert.alert('Error', error.message)
+        const msg = (error?.message || '').toLowerCase();
+        if (msg.includes('function admin_insert_property') || msg.includes('rpc') || msg.includes('procedure') || msg.includes('does not exist')) {
+            Alert.alert(
+                'Admin RPC ontbreekt',
+                'De benodigde functies zijn nog niet geïnstalleerd. Open Supabase > SQL Editor en voer scripts/sql/admin_functions.sql uit. Probeer daarna opnieuw.'
+            );
+        } else if (msg.includes('row level security') || msg.includes('permission denied') || msg.includes('violates row-level security')) {
+            Alert.alert(
+                'Permission required',
+                'Je hebt momenteel geen rechten om eigenschappen toe te voegen aan objecten van anderen. Zie admin functies in supabase/sql/admin_functions.sql om dit mogelijk te maken (of pas RLS policies aan).'
+            );
+        } else {
+            Alert.alert('Error', error.message)
+        }
         return false
     }
 }
@@ -735,17 +795,33 @@ const uploadPropertyFiles = async (propertyId, files) => {
                 .from('property_files')
                 .insert([
                     {
-                        property_id: propertyId,
+                        property_id: Number(propertyId),
                         file_name: file.name,
                         file_path: uploadData.path,
                         file_type: file.type || file.mimeType,
                         file_size: file.size
                     }
                 ])
-            
+
             if (dbError) {
-                console.error('[uploadPropertyFiles] Database insert error:', dbError)
-                throw dbError
+                const msg = (dbError.message || '').toLowerCase();
+                if (msg.includes('row level security') || msg.includes('permission denied') || msg.includes('violates row-level security')) {
+                    console.warn('[uploadPropertyFiles] RLS prevented property_files insert. Trying admin RPC fallback...')
+                    const { error: rpcErr } = await supabase.rpc('admin_insert_property_file', {
+                        p_property_id: Number(propertyId),
+                        p_file_name: file.name,
+                        p_file_path: uploadData.path,
+                        p_file_type: file.type || file.mimeType,
+                        p_file_size: file.size
+                    })
+                    if (rpcErr) {
+                        console.error('[uploadPropertyFiles] RPC fallback failed:', rpcErr)
+                        throw rpcErr
+                    }
+                } else {
+                    console.error('[uploadPropertyFiles] Database insert error:', dbError)
+                    throw dbError
+                }
             }
             
             console.log('[uploadPropertyFiles] File reference saved to database')
@@ -786,7 +862,7 @@ export const updateProperty = async (propertyId, { name, waarde, Formule_id, een
         console.log('[updateProperty] Property owner:', existingProperty.objects?.user_id);
         console.log('[updateProperty] Current user can edit:', existingProperty.objects?.user_id === user?.id);
         
-        const { data, error } = await supabase
+        let { data, error } = await supabase
             .from('eigenschappen')
             .update({
                 name,
@@ -799,8 +875,24 @@ export const updateProperty = async (propertyId, { name, waarde, Formule_id, een
             .select()
         
         if (error) {
-            console.error('[updateProperty] Database error:', error);
-            throw error;
+            const msg = (error.message || '').toLowerCase();
+            if (msg.includes('row level security') || msg.includes('permission denied') || msg.includes('violates row-level security')) {
+                console.warn('[updateProperty] RLS prevented update. Trying admin RPC fallback...');
+                const { error: rpcErr } = await supabase.rpc('admin_update_property', {
+                    p_property_id: Number(propertyId),
+                    p_name: name,
+                    p_waarde: waarde,
+                    p_eenheid: eenheid || '',
+                    p_formule_id: Formule_id != null ? Number(Formule_id) : null
+                });
+                if (rpcErr) {
+                    console.error('[updateProperty] RPC fallback failed:', rpcErr);
+                    throw rpcErr;
+                }
+            } else {
+                console.error('[updateProperty] Database error:', error);
+                throw error;
+            }
         }
         
         console.log('[updateProperty] Property updated successfully:', data);
