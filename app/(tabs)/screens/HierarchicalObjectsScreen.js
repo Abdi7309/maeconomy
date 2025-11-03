@@ -213,9 +213,11 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
         // Only on web
         if (Platform.OS !== 'web') return;
         try {
-            const deltaY = e.deltaY || e.nativeEvent?.deltaY || 0;
-            const multiplier = 1; // tune scroll speed
-            const target = Math.max(0, breadcrumbScrollX + deltaY * multiplier);
+            const deltaY = e.nativeEvent?.deltaY ?? e.deltaY ?? 0;
+            const deltaX = e.nativeEvent?.deltaX ?? e.deltaX ?? 0;
+            const delta = Math.abs(deltaX) > Math.abs(deltaY) ? deltaX : deltaY;
+            const multiplier = 3; // faster scroll
+            const target = Math.max(0, breadcrumbScrollX + delta * multiplier);
             if (breadcrumbScrollRef && breadcrumbScrollRef.current && typeof breadcrumbScrollRef.current.scrollTo === 'function') {
                 breadcrumbScrollRef.current.scrollTo({ x: target, animated: true });
             }
@@ -618,10 +620,125 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
             const { map, rootTotals } = computeAllProperties(source);
             // Separate totals for Hierarchie vs Processtroom
             const isFlowType = (t) => (t === 'raw_material' || t === 'intermediate' || t === 'component');
+            const includeInFlow = (node) => {
+                const t = node?.material_flow_type;
+                return isFlowType(t) || t === 'final_product' || t == null;
+            };
+            // Robust number parsing helpers for totals (handle strings like "100kg", nested objects, or values embedded in name)
+            const _parseNumeric = (val) => {
+                if (val == null) return 0;
+                try {
+                    const s = String(val).trim();
+                    const normalized = s.replace(',', '.').replace(/[^0-9.\-]+/g, ' ');
+                    const matches = normalized.match(/-?\d+(?:\.\d+)?/g);
+                    if (!matches) return 0;
+                    return matches.map((m) => parseFloat(m)).reduce((a, b) => a + b, 0);
+                } catch (e) {
+                    return 0;
+                }
+            };
+            const _extractNumeric = (raw) => {
+                if (raw == null) return 0;
+                if (typeof raw === 'number') return Number(raw);
+                if (typeof raw === 'string') return _parseNumeric(raw);
+                if (Array.isArray(raw)) return _parseNumeric(raw.join(' '));
+                if (typeof raw === 'object') {
+                    const candidates = [raw.amount, raw.value, raw.waarde, raw.val, raw.qty, raw.quantity, raw.number, raw.aantal, raw.text, raw.label, raw.name, raw.description];
+                    for (let i = 0; i < candidates.length; i++) {
+                        if (candidates[i] != null) return _extractNumeric(candidates[i]);
+                    }
+                    return _parseNumeric(JSON.stringify(raw));
+                }
+                return _parseNumeric(String(raw));
+            };
+            const ownPropsMap = (node) => {
+                const out = {};
+                const propsArr = Array.isArray(node?.properties) ? node.properties : (Array.isArray(node?.eigenschappen) ? node.eigenschappen : []);
+                (propsArr || []).forEach((p) => {
+                    if (!p) return;
+                    // Accept multiple possible keys for name
+                    const rawNameAll = (p.name || p.property_name || p.propertyName || p.naam || p.label || p.key || '').toString().trim();
+                    if (!rawNameAll) return;
+                    // Split name if it includes value (e.g., "steel=100kg")
+                    let pname = rawNameAll;
+                    let valueFromName = null;
+                    if (rawNameAll.includes('=')) {
+                        const parts = rawNameAll.split('=');
+                        if (parts.length >= 2) {
+                            pname = (parts[0] || '').trim();
+                            valueFromName = (parts.slice(1).join('=') || '').trim();
+                        }
+                    }
+                    if (!pname) return;
+                    // Gather value candidates
+                    const valCandidate = (p.waarde != null ? p.waarde
+                        : (p.value != null ? p.value
+                        : (p.val != null ? p.val
+                        : (p.amount != null ? p.amount
+                        : (p.aantal != null ? p.aantal
+                        : (p.number != null ? p.number
+                        : (p.qty != null ? p.qty
+                        : (p.quantity != null ? p.quantity
+                        : (p.waarde_text != null ? p.waarde_text
+                        : (p.text != null ? p.text : p.description))))))))));
+                    let num = _extractNumeric(valCandidate);
+                    // Fallback: parse digits embedded in name (e.g., "steel 100kg" or when only name has numeric)
+                    if ((num === 0 || !Number.isFinite(num)) && (valueFromName || /\d/.test(rawNameAll))) {
+                        num = _parseNumeric(valueFromName || rawNameAll);
+                    }
+                    if (!out[pname]) out[pname] = { total: 0, count: 0 };
+                    out[pname].total += num;
+                    out[pname].count += 1;
+                });
+                return out;
+            };
+            const mergeProps = (target, source) => {
+                Object.keys(source || {}).forEach((k) => {
+                    if (!target[k]) target[k] = { total: 0, count: 0 };
+                    target[k].total += source[k].total;
+                    target[k].count += source[k].count;
+                });
+                return target;
+            };
+            const aggregateFlowProps = (node) => {
+                if (!node) return {};
+                let agg = includeInFlow(node) ? ownPropsMap(node) : {};
+                if (Array.isArray(node.children) && node.children.length > 0) {
+                    node.children.forEach((ch) => {
+                        const childAgg = aggregateFlowProps(ch);
+                        agg = mergeProps(agg, childAgg);
+                    });
+                }
+                return agg;
+            };
+            // Totals across entire tree: include flow-allowed nodes even under non-flow parents
+            const aggregateFlowPropsTotals = (node) => {
+                if (!node) return {};
+                let agg = includeInFlow(node) ? ownPropsMap(node) : {};
+                if (Array.isArray(node.children) && node.children.length > 0) {
+                    node.children.forEach((ch) => {
+                        const childAgg = aggregateFlowPropsTotals(ch);
+                        agg = mergeProps(agg, childAgg);
+                    });
+                }
+                return agg;
+            };
             const hierRoots = (source || []).filter((n) => !isFlowType(n?.material_flow_type));
-            const flowRoots = (source || []).filter((n) => isFlowType(n?.material_flow_type));
+            const flowRoots = (source || []).filter((n) => isFlowType(n?.material_flow_type) || (n?.material_flow_type === 'final_product') || (n?.material_flow_type == null));
             const { rootTotals: hierTotals } = computeAllProperties(hierRoots);
-            const { rootTotals: flowTotals } = computeAllProperties(flowRoots);
+            // Compute flow totals using flow-only aggregation across entire subtree
+            const flowTotals = (() => {
+                const totals = {};
+                // Traverse all top-level roots so we include flow nodes even under default/non-flow parents
+                (source || []).forEach((root) => {
+                    const agg = aggregateFlowPropsTotals(root);
+                    Object.keys(agg).forEach((pname) => {
+                        if (!totals[pname]) totals[pname] = 0;
+                        totals[pname] += agg[pname].total;
+                    });
+                });
+                return totals;
+            })();
             setSummaryMap(map);
             setSummaryRootTotal(rootTotals);
             setSummaryRootTotalHierarchy(hierTotals);
