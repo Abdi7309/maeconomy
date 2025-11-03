@@ -50,6 +50,8 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
     const [showSummaryModal, setShowSummaryModal] = useState(false);
     const [summaryMap, setSummaryMap] = useState({}); // id -> { total, own, childrenSum, name }
     const [summaryRootTotal, setSummaryRootTotal] = useState(null);
+    const [summaryRootTotalHierarchy, setSummaryRootTotalHierarchy] = useState(null);
+    const [summaryRootTotalFlow, setSummaryRootTotalFlow] = useState(null);
     const [summaryPropertyName, setSummaryPropertyName] = useState('Oppervlakte');
     const [selectedSummaryParentId, setSelectedSummaryParentId] = useState(null); // selected top-level parent in modal
     const [selectedParentStack, setSelectedParentStack] = useState([]); // stack of parent ids for drill-down
@@ -614,8 +616,16 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
         try {
             const source = (localObjectsHierarchy && localObjectsHierarchy.length) ? localObjectsHierarchy : (objectsHierarchy || []);
             const { map, rootTotals } = computeAllProperties(source);
+            // Separate totals for Hierarchie vs Processtroom
+            const isFlowType = (t) => (t === 'raw_material' || t === 'intermediate' || t === 'component');
+            const hierRoots = (source || []).filter((n) => !isFlowType(n?.material_flow_type));
+            const flowRoots = (source || []).filter((n) => isFlowType(n?.material_flow_type));
+            const { rootTotals: hierTotals } = computeAllProperties(hierRoots);
+            const { rootTotals: flowTotals } = computeAllProperties(flowRoots);
             setSummaryMap(map);
             setSummaryRootTotal(rootTotals);
+            setSummaryRootTotalHierarchy(hierTotals);
+            setSummaryRootTotalFlow(flowTotals);
             setSummaryPropertyName('All properties');
             setSelectedSummaryParentId(null);
             setSelectedGroupKey(null);
@@ -626,6 +636,8 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
             console.error('[Summary] compute failed', e);
             setSummaryMap({});
             setSummaryRootTotal(null);
+            setSummaryRootTotalHierarchy(null);
+            setSummaryRootTotalFlow(null);
             setSummaryPropertyName('All properties');
             setSelectedSummaryParentId(null);
             setSelectedGroupKey(null);
@@ -1408,6 +1420,8 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                 summaryPropertyName={summaryPropertyName}
                 summaryMap={summaryMap}
                 summaryRootTotal={summaryRootTotal}
+                summaryRootTotalHierarchy={summaryRootTotalHierarchy}
+                summaryRootTotalFlow={summaryRootTotalFlow}
                 leftListData={leftListData}
                 leftPage={leftPage}
                 leftPageSize={leftPageSize}
@@ -1430,6 +1444,7 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                 getGroupMemberNames={getGroupMemberNames}
                 findNodeById={findNodeById}
                 buildGroupedList={buildGroupedList}
+                buildGroupedListSorted={buildGroupedListSorted}
                 rightPage={rightPage}
                 rightPageSize={rightPageSize}
                 setRightPage={setRightPage}
