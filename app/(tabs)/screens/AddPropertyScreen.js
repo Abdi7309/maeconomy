@@ -168,7 +168,16 @@ const AddPropertyScreen = ({ ...props }) => {
     const webInputRef = useRef(null);
 
     const objectIdForProperties = props.currentPath[props.currentPath.length - 1];
-    const item = props.findItemByPath(props.objectsHierarchy, props.currentPath);
+    let item = props.findItemByPath(props.objectsHierarchy, props.currentPath);
+    // Allow working on a temporary object before it exists in DB
+    if (!item && typeof objectIdForProperties === 'string' && objectIdForProperties.startsWith('temp_')) {
+        item = {
+            id: objectIdForProperties,
+            naam: props.fallbackTempItem?.naam || 'Nieuw object',
+            properties: [],
+            children: [],
+        };
+    }
 
     if (!item) return null;
 

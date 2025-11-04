@@ -35,7 +35,7 @@ const getMaterialFlowContext = (materialFlowType) => {
     }
 };
 
-const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, setCurrentScreen, setSelectedProperty, handleLogout, onRefresh, refreshing, allUsers, userToken, totalObjectCount, filterOption, setFilterOption, onAddObject, objectsHierarchy, onFormuleSaved, isLoading }) => {
+const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, setCurrentScreen, setSelectedProperty, setSelectedTempItem, handleLogout, onRefresh, refreshing, allUsers, userToken, totalObjectCount, filterOption, setFilterOption, onAddObject, objectsHierarchy, onFormuleSaved, isLoading, onTempObjectResolved }) => {
     const [showAddObjectModal, setShowAddObjectModal] = useState(false);
     const [addModalMode, setAddModalMode] = useState('single'); // 'single' | 'multiple'
     const [showFilterModal, setShowFilterModal] = useState(false);
@@ -67,10 +67,17 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
     // Keep localItems in sync with items prop (database objects)
     useEffect(() => {
         // If there are temporary objects, swap them with matching database objects
+        const resolutions = [];
         setLocalItems((prevLocal) => {
-            if (!items || items.length === 0) return [];
-            // Find temp objects by __instanceKey
+            console.log('[HierarchicalObjectsScreen] Syncing items. prevLocal count:', prevLocal?.length, 'incoming items count:', items?.length);
+            // Do NOT drop optimistic items if incoming items are empty; keep previous state
+            if (!items || items.length === 0) {
+                console.log('[HierarchicalObjectsScreen] Incoming items empty, keeping previous');
+                return prevLocal || [];
+            }
+            // Find temp objects by id prefix
             const tempObjects = prevLocal.filter(obj => typeof obj.id === 'string' && obj.id.startsWith('temp_'));
+            console.log('[HierarchicalObjectsScreen] Found temp objects:', tempObjects.map(t => t.id));
             if (tempObjects.length === 0) return items;
             // For each temp object, try to find a matching db object by name and groupKey
             let merged = [...items];
@@ -79,22 +86,37 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                     dbObj.naam === tempObj.naam &&
                     (dbObj.group_key || null) === (tempObj.group_key || null)
                 );
+                console.log('[HierarchicalObjectsScreen] Looking for match for temp', tempObj.id, 'naam:', tempObj.naam, 'found:', matchIdx >= 0);
                 if (matchIdx === -1) {
                     // If not found, keep temp object at the top
                     merged = [tempObj, ...merged];
+                } else {
+                    console.log('[HierarchicalObjectsScreen] Matched temp', tempObj.id, 'to DB', merged[matchIdx].id);
+                    resolutions.push({ tempId: tempObj.id, dbId: merged[matchIdx].id });
                 }
             });
             // Remove duplicate temp objects if db version exists
-            merged = merged.filter((obj, idx, arr) => {
+            const deduped = merged.filter((obj, idx, arr) => {
                 if (typeof obj.id === 'string' && obj.id.startsWith('temp_')) {
                     // If a db version exists, skip temp
                     return arr.findIndex(o => o.naam === obj.naam && (o.group_key || null) === (obj.group_key || null) && !(typeof o.id === 'string' && o.id.startsWith('temp_'))) === -1;
                 }
                 return true;
             });
-            return merged;
+            // Notify app asynchronously so we don't run side-effects inside state updater
+            if (resolutions.length && typeof onTempObjectResolved === 'function') {
+                console.log('[HierarchicalObjectsScreen] Scheduling resolution callbacks:', resolutions);
+                setTimeout(() => {
+                    resolutions.forEach(({ tempId, dbId }) => {
+                        console.log('[HierarchicalObjectsScreen] Calling onTempObjectResolved', { tempId, dbId });
+                        try { onTempObjectResolved(tempId, dbId); } catch (e) { console.error('[HierarchicalObjectsScreen] Resolution callback error:', e); }
+                    });
+                }, 0);
+            }
+            console.log('[HierarchicalObjectsScreen] Returning deduped items, count:', deduped.length);
+            return deduped;
         });
-    }, [items]);
+    }, [items, onTempObjectResolved]);
     const [localObjectsHierarchy, setLocalObjectsHierarchy] = useState(objectsHierarchy || []);
     // Keep localObjectsHierarchy in sync with prop updates
     useEffect(() => {
@@ -233,6 +255,15 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
     const [isAttachingExisting, setIsAttachingExisting] = useState(false);
     const lastLoadWasAddRef = useRef(false);
     const progressIntervalRef = useRef(null);
+    // Small utility: wrap a promise with a timeout to avoid indefinite hangs
+    const withTimeout = (promiseLike, ms = 12000, label = 'operation') => new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
+        Promise.resolve(promiseLike).then(
+            (val) => { clearTimeout(timeoutId); resolve(val); },
+            (err) => { clearTimeout(timeoutId); reject(err); }
+        );
+    });
+
     const wrappedOnAddObject = async (...args) => {
         lastLoadWasAddRef.current = true;
         setShowAddLoading(true);
@@ -250,6 +281,11 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
         // INSTANT UI UPDATE: Add object to local state
         const [currentPath, data] = args;
         let newObjects = [];
+        // Track temp ids we inject so we can roll them back on failure/timeout
+        const injectedTempIds = [];
+        // Get current user's username from allUsers
+        const currentUser = allUsers.find(u => u.id === userToken);
+        const currentUsername = currentUser?.username || 'Jij';
         if (data) {
             // Always generate a group_key for multiple objects if not present
             let groupKey = data.groupKey;
@@ -257,28 +293,33 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                 groupKey = `g_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
             }
             if (data.names) {
-                newObjects = data.names.map((name, idx) => ({
-                    id: `temp_${Date.now()}_${Math.random().toString(36).slice(2,8)}_${idx}`,
+                newObjects = data.names.map((name, idx) => {
+                    const tempId = `temp_${Date.now()}_${Math.random().toString(36).slice(2,8)}_${idx}`;
+                    injectedTempIds.push(tempId);
+                    return {
+                    id: tempId,
                     naam: name,
                     material_flow_type: data.materialFlowType || 'default',
                     group_key: groupKey || null,
                     properties: [],
                     children: [],
-                    owner_name: 'Jij',
+                    owner_name: currentUsername,
                     created_at: new Date().toISOString(),
-                    __instanceKey: `temp_${Date.now()}_${Math.random().toString(36).slice(2,8)}_${idx}`
-                }));
+                    __instanceKey: tempId
+                }});
             } else if (data.name) {
+                const tempId = `temp_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+                injectedTempIds.push(tempId);
                 newObjects = [{
-                    id: `temp_${Date.now()}_${Math.random().toString(36).slice(2,8)}`,
+                    id: tempId,
                     naam: data.name,
                     material_flow_type: data.materialFlowType || 'default',
                     group_key: groupKey || null,
                     properties: [],
                     children: [],
-                    owner_name: 'Jij',
+                    owner_name: currentUsername,
                     created_at: new Date().toISOString(),
-                    __instanceKey: `temp_${Date.now()}_${Math.random().toString(36).slice(2,8)}`
+                    __instanceKey: tempId
                 }];
             }
         }
@@ -286,13 +327,36 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
         setLocalItems((prev) => [...newObjects, ...prev]);
         // ASYNC DB SAVE
         try {
-            await onAddObject(...args);
+            const res = await withTimeout(onAddObject(...args), 20000, 'add-object');
+            // If API returns explicit false or error, handle as failure
+            if (!res || res.success === false) {
+                throw new Error(res?.message || 'Opslaan mislukt');
+            }
             // After successful save, refresh from database
             if (onRefresh) {
-                await onRefresh();
+                await withTimeout(onRefresh(), 15000, 'refresh');
                 // Do not setLocalItems here; let useEffect handle merging
             }
+            // Map returned DB ids to injected temp ids (preserve order)
+            try {
+                if (Array.isArray(res?.ids) && res.ids.length) {
+                    injectedTempIds.forEach((tempId, idx) => {
+                        const dbId = res.ids[idx];
+                        if (dbId && onTempObjectResolved) {
+                            onTempObjectResolved(tempId, dbId);
+                        }
+                        if (dbId) {
+                            // Optimistically replace temp id with real id in local list
+                            setLocalItems((prev) => prev.map((o) => o.id === tempId ? { ...o, id: dbId } : o));
+                        }
+                    });
+                }
+            } catch (_) { /* ignore */ }
         } catch (e) {
+            // Rollback optimistic temp items
+            if (injectedTempIds.length) {
+                setLocalItems((prev) => prev.filter((obj) => !injectedTempIds.includes(obj.id)));
+            }
             Alert.alert('Fout', 'Opslaan naar database mislukt. Probeer opnieuw.');
         }
         // Complete progress
@@ -308,7 +372,7 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
         }, 350);
     };
     // Skeleton loader logic: show skeleton when isLoading is true and not adding object
-    const showSkeleton = isLoading && !lastLoadWasAddRef.current;
+    const showSkeleton = (isLoading || refreshing) && !lastLoadWasAddRef.current;
     // Don't show skeleton when attaching existing objects
     const showSkeletonFixed = showSkeleton && !isAttachingExisting;
 
@@ -796,11 +860,12 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
         const results = [];
         const walk = (arr) => {
             if (!Array.isArray(arr)) return;
-            arr.forEach((n) => {
-                if (!n) return;
+            for (let i = 0; i < arr.length; i++) {
+                const n = arr[i];
+                if (!n) continue;
                 if (n.group_key === groupKey) results.push(n.naam);
                 if (Array.isArray(n.children) && n.children.length) walk(n.children);
-            });
+            }
         };
         walk(localObjectsHierarchy || objectsHierarchy || []);
         return results;
@@ -1123,7 +1188,12 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                                                     <PropertyButton onClick={(e) => {
                                                         e.stopPropagation();
                                                         setSelectedProperty(anchorId);
-                                                        setCurrentScreen('properties');
+                                                        if (typeof anchorId === 'string' && anchorId.startsWith('temp_')) {
+                                                            if (setSelectedTempItem) setSelectedTempItem({ id: anchorId, naam: anchor?.naam, group_key: group.group_key || null });
+                                                            setCurrentScreen('properties');
+                                                        } else {
+                                                            setCurrentScreen('properties');
+                                                        }
                                                     }} />
                                                 </View>
                                             </TouchableOpacity>
@@ -1186,7 +1256,12 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                                             <PropertyButton onClick={(e) => {
                                                 e.stopPropagation();
                                                 setSelectedProperty(primary.id);
-                                                setCurrentScreen('properties');
+                                                if (typeof primary.id === 'string' && primary.id.startsWith('temp_')) {
+                                                    if (setSelectedTempItem) setSelectedTempItem({ id: primary.id, naam: primary.naam, group_key: primary.group_key || null });
+                                                    setCurrentScreen('properties');
+                                                } else {
+                                                    setCurrentScreen('properties');
+                                                }
                                             }} />
                                         </View>
                                     </TouchableOpacity>

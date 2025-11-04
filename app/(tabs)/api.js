@@ -577,6 +577,17 @@ export const handleAddObject = async (parentPath, newObjectData, userToken) => {
     const { name, names, groupKey: externalGroupKey, materialFlowType = 'default' } = newObjectData || {};
 
     try {
+        // Ensure we have an authenticated session before attempting a write
+        const { data: sessionData } = await supabase.auth.getSession();
+        if (!sessionData?.session) {
+            // Give auth a brief moment to (re)hydrate on cold start
+            await new Promise((r) => setTimeout(r, 250));
+        }
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            throw new Error('Niet ingelogd. Log opnieuw in en probeer nogmaals.');
+        }
+
         // Normalize list of names
         let items = [];
         if (Array.isArray(names) && names.length > 0) {
@@ -609,9 +620,21 @@ export const handleAddObject = async (parentPath, newObjectData, userToken) => {
             ...(groupKey ? { group_key: groupKey } : {})
         }));
 
-        let insertRes = await supabase
-            .from('objects')
-            .insert(payload);
+        // Wrap supabase call in a timeout to avoid indefinite hangs
+        const withTimeout = (promiseLike, ms = 12000, label = 'add-object') => new Promise((resolve, reject) => {
+            const to = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
+            Promise.resolve(promiseLike).then(
+                (val) => { clearTimeout(to); resolve(val); },
+                (err) => { clearTimeout(to); reject(err); }
+            );
+        });
+
+    let insertRes = await withTimeout(
+            supabase
+                .from('objects')
+                .insert(payload)
+        .select('id')
+        );
 
         if (insertRes.error) {
             // Fallback if group_key column doesn't exist yet
@@ -619,9 +642,12 @@ export const handleAddObject = async (parentPath, newObjectData, userToken) => {
             if (insertRes.error.code === '42703' || msg.includes('group_key') || msg.includes('material_flow_type')) {
                 console.warn('[handleAddObject] column missing, retrying without it');
                 const payloadFallback = payload.map(({ group_key, material_flow_type, ...rest }) => rest);
-                insertRes = await supabase
-                    .from('objects')
-                    .insert(payloadFallback);
+                insertRes = await withTimeout(
+                    supabase
+                        .from('objects')
+                        .insert(payloadFallback)
+                        .select('id')
+                );
             }
         }
 
@@ -631,18 +657,36 @@ export const handleAddObject = async (parentPath, newObjectData, userToken) => {
         }
 
         console.log('[handleAddObject] Objects created successfully:', uniqueNames.length);
+        const createdIds = Array.isArray(insertRes.data) ? insertRes.data.map(r => r.id) : [];
         Alert.alert('Success', `${uniqueNames.length} object(en) succesvol aangemaakt`);
-        return true;
+        return { success: true, ids: createdIds };
     } catch (error) {
         console.error('Error adding object(s):', error);
         Alert.alert('Error', error.message || 'Failed to create object(s)');
-        return false;
+        return { success: false, message: error.message || 'Failed to create object(s)' };
     }
 }
 
 export const addProperties = async (objectId, properties) => {
     try {
         console.log('[addProperties] Adding', properties.length, 'properties to object', objectId)
+        // Ensure authenticated session to avoid RLS surprises on cold start
+        const { data: sessionData } = await supabase.auth.getSession();
+        if (!sessionData?.session) {
+            await new Promise((r) => setTimeout(r, 250));
+        }
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            throw new Error('Niet ingelogd. Log opnieuw in en probeer nogmaals.');
+        }
+
+        const withTimeout = (promiseLike, ms = 15000, label = 'operation') => new Promise((resolve, reject) => {
+            const to = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
+            Promise.resolve(promiseLike).then(
+                (val) => { clearTimeout(to); resolve(val); },
+                (err) => { clearTimeout(to); reject(err); }
+            );
+        });
         
         const isRlsDenied = (err) => {
             if (!err) return false;
@@ -659,7 +703,8 @@ export const addProperties = async (objectId, properties) => {
             console.log('[addProperties] Processing property:', prop.name, 'files:', prop.files?.length || 0)
             
             // Insert property
-            let { data: propertyData, error: propertyError } = await supabase
+            let { data: propertyData, error: propertyError } = await withTimeout(
+                supabase
                 .from('eigenschappen')
                 .insert([
                     {
@@ -671,18 +716,25 @@ export const addProperties = async (objectId, properties) => {
                     }
                 ])
                 .select()
-                .single()
+                .single(),
+                15000,
+                'add-property'
+            )
 
             // Fallback via RPC when RLS prevents inserting into someone else's object
             if (propertyError && isRlsDenied(propertyError)) {
                 console.warn('[addProperties] RLS prevented insert. Trying admin RPC fallback...');
-                const { data: rpcId, error: rpcErr } = await supabase.rpc('admin_insert_property', {
-                    p_object_id: Number(objectId),
-                    p_name: prop.name.trim(),
-                    p_waarde: prop.waarde,
-                    p_eenheid: prop.unit || '',
-                    p_formule_id: prop.Formule_id != null ? Number(prop.Formule_id) : null,
-                });
+                const { data: rpcId, error: rpcErr } = await withTimeout(
+                    supabase.rpc('admin_insert_property', {
+                        p_object_id: objectId,
+                        p_name: prop.name.trim(),
+                        p_waarde: prop.waarde,
+                        p_eenheid: prop.unit || '',
+                        p_formule_id: prop.Formule_id != null ? prop.Formule_id : null,
+                    }),
+                    15000,
+                    'admin_insert_property'
+                )
                 if (rpcErr) {
                     console.error('[addProperties] RPC fallback failed:', rpcErr);
                     throw rpcErr;
@@ -693,14 +745,18 @@ export const addProperties = async (objectId, properties) => {
                     propertyData = { id: rpcId };
                 } else {
                     console.warn('[addProperties] RPC returned no ID, attempting to fetch last matching property');
-                    const { data: found, error: findErr } = await supabase
+                    const { data: found, error: findErr } = await withTimeout(
+                        supabase
                         .from('eigenschappen')
                         .select('id')
                         .eq('object_id', objectId)
                         .eq('name', prop.name.trim())
                         .order('id', { ascending: false })
                         .limit(1)
-                        .maybeSingle();
+                        .maybeSingle(),
+                        10000,
+                        'post-rpc-fetch'
+                    );
                     if (findErr) {
                         console.warn('[addProperties] Post-RPC fetch failed:', findErr);
                     }
@@ -723,10 +779,12 @@ export const addProperties = async (objectId, properties) => {
             }
         }
         
+        console.log('[addProperties] All properties added successfully');
         Alert.alert('Success', 'Properties added successfully!')
         return true
     } catch (error) {
-        console.error('Error adding properties:', error)
+        console.error('[addProperties] Error adding properties:', error)
+        console.error('[addProperties] Error details:', { message: error?.message, code: error?.code, status: error?.status })
         const msg = (error?.message || '').toLowerCase();
         if (msg.includes('function admin_insert_property') || msg.includes('rpc') || msg.includes('procedure') || msg.includes('does not exist')) {
             Alert.alert(
@@ -748,6 +806,13 @@ export const addProperties = async (objectId, properties) => {
 const uploadPropertyFiles = async (propertyId, files) => {
     try {
         console.log('[uploadPropertyFiles] Starting upload for', files.length, 'files')
+        const withTimeout = (promiseLike, ms = 20000, label = 'upload') => new Promise((resolve, reject) => {
+            const to = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
+            Promise.resolve(promiseLike).then(
+                (val) => { clearTimeout(to); resolve(val); },
+                (err) => { clearTimeout(to); reject(err); }
+            );
+        });
         
         // Test if bucket exists
         const { data: buckets, error: bucketError } = await supabase.storage.listBuckets()
@@ -775,12 +840,16 @@ const uploadPropertyFiles = async (propertyId, files) => {
             console.log('[uploadPropertyFiles] Uploading to storage:', filePath)
             
             // Upload to Supabase Storage
-            const { data: uploadData, error: uploadError } = await supabase.storage
+            const { data: uploadData, error: uploadError } = await withTimeout(
+                supabase.storage
                 .from('property-files')
                 .upload(filePath, fileToUpload, {
                     cacheControl: '3600',
                     upsert: false
-                })
+                }),
+                30000,
+                'storage-upload'
+            )
             
             if (uploadError) {
                 console.error('[uploadPropertyFiles] Storage upload error:', uploadError)
@@ -791,29 +860,37 @@ const uploadPropertyFiles = async (propertyId, files) => {
             
             // Save file reference to database
             console.log('[uploadPropertyFiles] Saving file reference to database')
-            const { error: dbError } = await supabase
+            const { error: dbError } = await withTimeout(
+                supabase
                 .from('property_files')
                 .insert([
                     {
-                        property_id: Number(propertyId),
+                        property_id: propertyId,
                         file_name: file.name,
                         file_path: uploadData.path,
                         file_type: file.type || file.mimeType,
                         file_size: file.size
                     }
-                ])
+                ]),
+                15000,
+                'property_files-insert'
+            )
 
             if (dbError) {
                 const msg = (dbError.message || '').toLowerCase();
                 if (msg.includes('row level security') || msg.includes('permission denied') || msg.includes('violates row-level security')) {
                     console.warn('[uploadPropertyFiles] RLS prevented property_files insert. Trying admin RPC fallback...')
-                    const { error: rpcErr } = await supabase.rpc('admin_insert_property_file', {
-                        p_property_id: Number(propertyId),
-                        p_file_name: file.name,
-                        p_file_path: uploadData.path,
-                        p_file_type: file.type || file.mimeType,
-                        p_file_size: file.size
-                    })
+                    const { error: rpcErr } = await withTimeout(
+                        supabase.rpc('admin_insert_property_file', {
+                            p_property_id: propertyId,
+                            p_file_name: file.name,
+                            p_file_path: uploadData.path,
+                            p_file_type: file.type || file.mimeType,
+                            p_file_size: file.size
+                        }),
+                        15000,
+                        'admin_insert_property_file'
+                    )
                     if (rpcErr) {
                         console.error('[uploadPropertyFiles] RPC fallback failed:', rpcErr)
                         throw rpcErr

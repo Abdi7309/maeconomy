@@ -4,7 +4,7 @@ import { Image, Linking, Modal, RefreshControl, ScrollView, StatusBar, Text, Tou
 import AppStyles, { colors } from '../AppStyles';
 import { supabase } from '../config/config';
 
-const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onRefresh, refreshing }) => {
+const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onRefresh, refreshing, fallbackTempItem }) => {
     
     // --- NEW: State for the image modal ---
     const [modalVisible, setModalVisible] = useState(false);
@@ -27,7 +27,17 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
         return foundItem;
     };
 
-    const item = findItemByPath(objectsHierarchy, currentPath);
+    const objectId = currentPath[currentPath.length - 1];
+    let item = findItemByPath(objectsHierarchy, currentPath);
+    // Allow temp objects to show a minimal properties screen before DB row exists
+    if (!item && typeof objectId === 'string' && objectId.startsWith('temp_')) {
+        item = {
+            id: objectId,
+            naam: fallbackTempItem?.naam || 'Nieuw object',
+            properties: [],
+            children: [],
+        };
+    }
 
     if (!item) {
         return <View style={[AppStyles.screen, { justifyContent: 'center', alignItems: 'center' }]}><Text style={AppStyles.emptyStateText}>Item not found...</Text></View>;

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, View } from 'react-native';
 import {
     handleAddObject as apiAddObject,
@@ -37,6 +37,12 @@ const App = () => {
     const [allUsers, setAllUsers] = useState([]);
     const [totalObjectCount, setTotalObjectCount] = useState(0);
     const [filterOption, setFilterOption] = useState(null);
+    // Allow navigating into temp object properties immediately
+    const [selectedTempItem, setSelectedTempItem] = useState(null); // { id, naam, group_key? }
+    // Queue properties for temp objects until DB id is known
+    const [pendingPropsByTempId, setPendingPropsByTempId] = useState({}); // tempId -> properties array
+    // Use useRef to ensure we always read the latest queued properties in async callbacks
+    const pendingPropsRef = useRef({});
 
     // Initialize app state and check for Supabase session
     useEffect(() => {
@@ -233,23 +239,43 @@ const App = () => {
         }
     };
 
-    const onRefresh = () => {
-        handleFetchObjects(true);
-        handleFetchTemplates();
-        handleFetchUsers();
+    const onRefresh = async () => {
+        // Ensure we wait for all refresh tasks to complete so callers can await onRefresh()
+        await Promise.all([
+            handleFetchObjects(true),
+            handleFetchTemplates(),
+            handleFetchUsers(),
+        ]).catch((e) => console.warn('[onRefresh] One or more refresh tasks failed', e));
     };
 
 
 
     const handleAddObject = async (parentPath, newObjectData) => {
-        const success = await apiAddObject(parentPath, newObjectData, userToken);
-        if (success) {
+        const res = await apiAddObject(parentPath, newObjectData, userToken);
+        if (res && res.success) {
             await handleFetchObjects();
             await handleFetchUsers();
         }
+        return res;
     };
 
     const handleAddProperties = async (objectId, properties) => {
+        // If object is still optimistic (temp_), queue the properties and return success immediately
+        if (typeof objectId === 'string' && objectId.startsWith('temp_')) {
+            setPendingPropsByTempId((prev) => ({
+                ...prev,
+                [objectId]: [...(prev[objectId] || []), ...properties],
+            }));
+            // Also update the ref so async callbacks can access it
+            pendingPropsRef.current = {
+                ...pendingPropsRef.current,
+                [objectId]: [...(pendingPropsRef.current[objectId] || []), ...properties],
+            };
+            console.log('[handleAddProperties] Queued properties for temp object', objectId, properties.length);
+            console.log('[handleAddProperties] Queued properties ref now:', pendingPropsRef.current);
+            return true;
+        }
+        // Otherwise, persist to DB now
         const success = await apiAddProperties(objectId, properties);
         if (success) {
             await handleFetchObjects();
@@ -296,6 +322,60 @@ const App = () => {
         return foundItem;
     };
 
+    // Resolve callback from objects list when a temp object is matched with a DB object
+    const handleTempObjectResolved = async (tempId, dbId) => {
+        try {
+            // Read from ref instead of state to avoid stale closure issues
+            const queued = pendingPropsRef.current[tempId];
+            console.log('[App] handleTempObjectResolved called', { tempId, dbId, queuedCount: queued?.length || 0 });
+            console.log('[App] pendingPropsRef.current:', pendingPropsRef.current);
+            if (queued && queued.length) {
+                console.log('[App] Flushing queued properties for', tempId, '=>', dbId, queued.length);
+                console.log('[App] Queued properties:', queued);
+                const ok = await apiAddProperties(dbId, queued);
+                console.log('[App] apiAddProperties result:', ok);
+                if (ok) {
+                    // Clear from both state and ref
+                    setPendingPropsByTempId((prev) => {
+                        const copy = { ...prev };
+                        delete copy[tempId];
+                        return copy;
+                    });
+                    delete pendingPropsRef.current[tempId];
+                    // Update the object hierarchy with the new properties (silent update, no skeleton)
+                    console.log('[App] Updating object hierarchy with new properties');
+                    setObjectsHierarchy((prev) => {
+                        const updateObjectProps = (items) => {
+                            return (items || []).map((item) => {
+                                if (item.id === dbId) {
+                                    // Add the new properties to this object
+                                    return {
+                                        ...item,
+                                        properties: [...(item.properties || []), ...queued],
+                                    };
+                                }
+                                // Recursively update children
+                                if (item.children && item.children.length) {
+                                    return {
+                                        ...item,
+                                        children: updateObjectProps(item.children),
+                                    };
+                                }
+                                return item;
+                            });
+                        };
+                        return updateObjectProps(prev);
+                    });
+                }
+            }
+            // If the user is currently viewing the temp object, switch selection to the real object id
+            console.log('[App] Switching selectedProperty from', tempId, 'to', dbId);
+            setSelectedProperty((prev) => (prev === tempId ? dbId : prev));
+        } catch (e) {
+            console.warn('[App] Failed to flush queued properties', e);
+        }
+    };
+
     const renderContent = () => {
         // --- 7. ADD INITIAL LOADING INDICATOR ---
         if (isAppLoading) {
@@ -325,6 +405,8 @@ const App = () => {
                 setCurrentPath={setCurrentPath}
                 setCurrentScreen={setCurrentScreen}
                 setSelectedProperty={setSelectedProperty}
+                setSelectedTempItem={setSelectedTempItem}
+                onTempObjectResolved={handleTempObjectResolved}
                 handleLogout={handleLogout}
                 onRefresh={onRefresh}
                 refreshing={refreshing}
@@ -348,6 +430,7 @@ const App = () => {
                     <PropertiesScreen 
                         currentPath={[...currentPath, selectedProperty]}
                         objectsHierarchy={objectsHierarchy}
+                        fallbackTempItem={selectedTempItem}
                         setCurrentScreen={setCurrentScreen}
                         onRefresh={onRefresh}
                         refreshing={refreshing}
@@ -358,6 +441,7 @@ const App = () => {
             case 'addProperty':
                 return (
                     <AddPropertyScreen 
+                        fallbackTempItem={selectedTempItem}
                         currentPath={[...currentPath, selectedProperty]}
                         objectsHierarchy={objectsHierarchy}
                         fetchedTemplates={fetchedTemplates}
@@ -371,12 +455,8 @@ const App = () => {
                     />
                 );
             case 'materials':
-                return (
-                    <MaterialsScreen
-                        setCurrentScreen={setCurrentScreen}
-                        objectsHierarchy={objectsHierarchy}
-                    />
-                );
+                // Materials screen not implemented/available
+                return objectsScreen;
             default:
                 return objectsScreen;
         }
