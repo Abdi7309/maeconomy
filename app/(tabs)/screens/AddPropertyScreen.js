@@ -433,6 +433,7 @@ const AddPropertyScreen = ({ ...props }) => {
 
 
     const handleSaveOnBack = async () => {
+        // Build properties to save (same logic as before)
         const propertiesToSave = newPropertiesList
             .filter(prop => prop.name.trim() !== '')
             .map(prop => {
@@ -442,16 +443,14 @@ const AddPropertyScreen = ({ ...props }) => {
 
                 if (isFormule) {
                     rawFormule = prop.Formule_expression;
-                    // Use the already calculated value from prop.value
                     finalValue = prop.value;
                 } else {
-                    // For non-formulas, use the regular value
                     finalValue = prop.value;
                 }
 
                 return {
                     ...prop,
-                    waarde: String(roundToDecimals(finalValue || 0)), // Ensure value is a rounded string
+                    waarde: String(roundToDecimals(finalValue || 0)),
                 };
             });
 
@@ -460,10 +459,82 @@ const AddPropertyScreen = ({ ...props }) => {
             return;
         }
 
-        const success = await props.onSave(objectIdForProperties, propertiesToSave);
+        // -- Optimistic UI update: inject temporary props immediately --
+        const tempNow = Date.now();
+        const tempProps = propertiesToSave.map((p, idx) => ({
+            ...p,
+            id: `temp_prop_${tempNow}_${idx}`,
+        }));
 
-        if (success) {
-            props.setCurrentScreen('properties');
+        // Add to the live item.properties for immediate visibility
+        if (item) {
+            item.properties = Array.isArray(item.properties) ? [...item.properties, ...tempProps] : [...tempProps];
+        }
+
+        // Mirror into existingPropertiesDraft so PropertiesScreen shows them
+        setExistingPropertiesDraft(prev => [
+            ...prev,
+            ...tempProps.map(tp => ({
+                id: tp.id,
+                name: tp.name,
+                waarde: tp.waarde,
+                Formule_id: tp.Formule_id || null,
+                Formule_name: tp.Formule_name || '',
+                Formule_expression: tp.Formule_expression || '',
+                eenheid: tp.eenheid || ''
+            }))
+        ]);
+
+        // Clear new form fields and navigate back instantly
+        setNewPropertiesList([]);
+        props.setCurrentScreen('properties');
+
+        // Helper to avoid hanging saves
+        const withTimeout = (promiseLike, ms = 20000, label = 'save-properties') => new Promise((resolve, reject) => {
+            const timeoutId = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
+            Promise.resolve(promiseLike).then(
+                (val) => { clearTimeout(timeoutId); resolve(val); },
+                (err) => { clearTimeout(timeoutId); reject(err); }
+            );
+        });
+
+        // Perform actual save in background and reconcile results (or rollback on failure)
+        try {
+            const res = await withTimeout(props.onSave(objectIdForProperties, propertiesToSave), 20000, 'save-properties');
+
+            // If backend returned ids for the saved properties, replace temp ids with real ids
+            if (res && Array.isArray(res.ids) && res.ids.length) {
+                const ids = res.ids;
+                // Update item.properties
+                if (item && Array.isArray(item.properties)) {
+                    item.properties = item.properties.map((ip) => {
+                        const matchIdx = tempProps.findIndex(tp => tp.id === ip.id);
+                        if (matchIdx !== -1 && ids[matchIdx]) {
+                            return { ...ip, id: ids[matchIdx] };
+                        }
+                        return ip;
+                    });
+                }
+                // Update existingPropertiesDraft
+                setExistingPropertiesDraft(prev => prev.map(p => {
+                    const matchIdx = tempProps.findIndex(tp => tp.id === p.id);
+                    if (matchIdx !== -1 && ids[matchIdx]) {
+                        return { ...p, id: ids[matchIdx] };
+                    }
+                    return p;
+                }));
+            } else if (res === false || (res && res.success === false)) {
+                throw new Error(res?.message || 'Opslaan mislukt');
+            }
+            // succes: nothing more to do (UI already updated)
+        } catch (e) {
+            // Rollback optimistic items on error
+            if (item && Array.isArray(item.properties)) {
+                item.properties = item.properties.filter(ip => !String(ip.id).startsWith('temp_prop_'));
+            }
+            setExistingPropertiesDraft(prev => prev.filter(p => !String(p.id).startsWith('temp_prop_')));
+            Alert.alert('Fout', 'Opslaan van eigenschappen mislukt. Probeer opnieuw.');
+            console.error('Save properties failed', e);
         }
     };
 
