@@ -489,53 +489,148 @@ const AddPropertyScreen = ({ ...props }) => {
         setNewPropertiesList([]);
         props.setCurrentScreen('properties');
 
-        // Helper to avoid hanging saves
-        const withTimeout = (promiseLike, ms = 20000, label = 'save-properties') => new Promise((resolve, reject) => {
-            const timeoutId = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
-            Promise.resolve(promiseLike).then(
-                (val) => { clearTimeout(timeoutId); resolve(val); },
-                (err) => { clearTimeout(timeoutId); reject(err); }
-            );
-        });
+        // Save with retries and fallback
+        const MAX_ATTEMPTS = 3;
+        const saveLabel = 'save-properties';
 
-        // Perform actual save in background and reconcile results (or rollback on failure)
-        try {
-            const res = await withTimeout(props.onSave(objectIdForProperties, propertiesToSave), 20000, 'save-properties');
+        const fallbackFetchSave = async () => {
+            try {
+                const resp = await fetch('/api/properties/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
+                    body: JSON.stringify({ objectId: objectIdForProperties, properties: propertiesToSave })
+                });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const json = await resp.json();
+                return json;
+            } catch (err) {
+                throw err;
+            }
+        };
 
-            // If backend returned ids for the saved properties, replace temp ids with real ids
-            if (res && Array.isArray(res.ids) && res.ids.length) {
-                const ids = res.ids;
-                // Update item.properties
-                if (item && Array.isArray(item.properties)) {
-                    item.properties = item.properties.map((ip) => {
-                        const matchIdx = tempProps.findIndex(tp => tp.id === ip.id);
-                        if (matchIdx !== -1 && ids[matchIdx]) {
-                            return { ...ip, id: ids[matchIdx] };
-                        }
-                        return ip;
-                    });
-                }
-                // Update existingPropertiesDraft
-                setExistingPropertiesDraft(prev => prev.map(p => {
-                    const matchIdx = tempProps.findIndex(tp => tp.id === p.id);
-                    if (matchIdx !== -1 && ids[matchIdx]) {
-                        return { ...p, id: ids[matchIdx] };
+        const doSaveOnce = async () => {
+            // prefer provided onSave, else fallback to direct fetch
+            if (typeof props.onSave === 'function') {
+                return props.onSave(objectIdForProperties, propertiesToSave);
+            }
+            return fallbackFetchSave();
+        };
+
+        const delay = (ms) => new Promise(res => setTimeout(res, ms));
+
+        let lastError = null;
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            try {
+                // longer timeout wrapper
+                const withTimeout = (promiseLike, ms = 20000, label = saveLabel) => new Promise((resolve, reject) => {
+                    const timeoutId = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
+                    Promise.resolve(promiseLike).then(
+                        (val) => { clearTimeout(timeoutId); resolve(val); },
+                        (err) => { clearTimeout(timeoutId); reject(err); }
+                    );
+                });
+
+                const res = await withTimeout(doSaveOnce(), 20000, saveLabel);
+
+                // If backend returned ids for the saved properties, replace temp ids with real ids
+                if (res && Array.isArray(res.ids) && res.ids.length) {
+                    const ids = res.ids;
+                    if (item && Array.isArray(item.properties)) {
+                        item.properties = item.properties.map((ip) => {
+                            const matchIdx = tempProps.findIndex(tp => tp.id === ip.id);
+                            if (matchIdx !== -1 && ids[matchIdx]) {
+                                return { ...ip, id: ids[matchIdx] };
+                            }
+                            return ip;
+                        });
                     }
-                    return p;
-                }));
-            } else if (res === false || (res && res.success === false)) {
-                throw new Error(res?.message || 'Opslaan mislukt');
+                    setExistingPropertiesDraft(prev => prev.map(p => {
+                        const matchIdx = tempProps.findIndex(tp => tp.id === p.id);
+                        if (matchIdx !== -1 && ids[matchIdx]) {
+                            return { ...p, id: ids[matchIdx] };
+                        }
+                        return p;
+                    }));
+                } else if (res === false || (res && res.success === false)) {
+                    throw new Error(res?.message || 'Opslaan mislukt');
+                } else {
+                    // Generic success without ids: trigger refresh so DB state shown
+                    if (typeof props.onRefresh === 'function') {
+                        try { await props.onRefresh(); } catch (_) { /* ignore refresh errors */ }
+                    }
+                }
+
+                // successful save: if provided, trigger a refresh to be safe
+                if (typeof props.onRefresh === 'function') {
+                    try { await props.onRefresh(); } catch (_) { /* ignore */ }
+                }
+                return; // done
+            } catch (err) {
+                lastError = err;
+                console.warn(`[handleSaveOnBack] save attempt ${attempt} failed:`, err);
+                if (attempt < MAX_ATTEMPTS) {
+                    // wait with exponential backoff
+                    await delay(500 * Math.pow(2, attempt - 1));
+                    continue;
+                }
             }
-            // succes: nothing more to do (UI already updated)
-        } catch (e) {
-            // Rollback optimistic items on error
-            if (item && Array.isArray(item.properties)) {
-                item.properties = item.properties.filter(ip => !String(ip.id).startsWith('temp_prop_'));
-            }
-            setExistingPropertiesDraft(prev => prev.filter(p => !String(p.id).startsWith('temp_prop_')));
-            Alert.alert('Fout', 'Opslaan van eigenschappen mislukt. Probeer opnieuw.');
-            console.error('Save properties failed', e);
         }
+
+        // All attempts failed -> ask user what to do
+        Alert.alert(
+            'Opslaan mislukt',
+            'Kon de eigenschappen niet naar de server sturen. Wat wil je doen?',
+            [
+                {
+                    text: 'Probeer opnieuw',
+                    onPress: async () => {
+                        // leave temp items in UI and try again
+                        try {
+                            const res = await doSaveOnce();
+                            if (res && Array.isArray(res.ids) && res.ids.length) {
+                                const ids = res.ids;
+                                if (item && Array.isArray(item.properties)) {
+                                    item.properties = item.properties.map((ip) => {
+                                        const matchIdx = tempProps.findIndex(tp => tp.id === ip.id);
+                                        if (matchIdx !== -1 && ids[matchIdx]) {
+                                            return { ...ip, id: ids[matchIdx] };
+                                        }
+                                        return ip;
+                                    });
+                                }
+                                setExistingPropertiesDraft(prev => prev.map(p => {
+                                    const matchIdx = tempProps.findIndex(tp => tp.id === p.id);
+                                    if (matchIdx !== -1 && ids[matchIdx]) {
+                                        return { ...p, id: ids[matchIdx] };
+                                    }
+                                    return p;
+                                }));
+                            }
+                            if (typeof props.onRefresh === 'function') {
+                                try { await props.onRefresh(); } catch (_) {}
+                            }
+                        } catch (e) {
+                            Alert.alert('Nog steeds mislukt', 'Probeer later opnieuw of controleer je netwerk.');
+                        }
+                    }
+                },
+                {
+                    text: 'Verwijder tijdelijk',
+                    style: 'destructive',
+                    onPress: () => {
+                        // rollback optimistic items
+                        if (item && Array.isArray(item.properties)) {
+                            item.properties = item.properties.filter(ip => !String(ip.id).startsWith('temp_prop_'));
+                        }
+                        setExistingPropertiesDraft(prev => prev.filter(p => !String(p.id).startsWith('temp_prop_')));
+                    }
+                },
+                { text: 'Laat staan', style: 'cancel' } // keep in UI for later retry
+            ],
+            { cancelable: true }
+        );
+
+        console.error('Final save error:', lastError);
     };
 
     useEffect(() => {
