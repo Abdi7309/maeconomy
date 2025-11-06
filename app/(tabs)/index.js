@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, View } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
     handleAddObject as apiAddObject,
     addProperties as apiAddProperties,
@@ -133,12 +134,21 @@ const App = () => {
 
     const handleFetchUsers = async () => {
         try {
-            // Only fix missing profiles on first load or when explicitly needed
-            // This reduces unnecessary database calls
+            // Try cache first (users don't change as often)
+            const cached = await getCachedData('users');
+            if (cached) {
+                console.log('[handleFetchUsers] Using cached users');
+                setAllUsers(cached.users);
+                setTotalObjectCount(cached.totalObjectCount);
+                return;
+            }
+
+            // Fetch fresh data
             const data = await fetchAllUsers();
             if (data) {
                 setAllUsers(data.users);
                 setTotalObjectCount(data.totalObjectCount);
+                await setCachedData('users', data);
             }
         } catch (error) {
             console.error('[handleFetchUsers] Error fetching users:', error);
@@ -218,26 +228,95 @@ const App = () => {
         }
     };
 
+    // ===== PERFORMANCE: Caching helpers =====
+    const getCacheKey = (type) => `cache_${userToken}_${type}`;
+    const CACHE_DURATION = 10 * 60 * 1000; // 10 minutes
+    
+    const getCachedData = async (type) => {
+        try {
+            const cacheKey = getCacheKey(type);
+            const cached = await AsyncStorage.getItem(cacheKey);
+            if (!cached) return null;
+            
+            const { data, timestamp } = JSON.parse(cached);
+            const age = Date.now() - timestamp;
+            
+            // Return cache if less than 10 minutes old
+            if (age < CACHE_DURATION) {
+                console.log(`[Cache] Hit for ${type}, age: ${Math.round(age / 1000)}s`);
+                return data;
+            }
+            
+            // Cache expired
+            console.log(`[Cache] Expired for ${type}, age: ${Math.round(age / 1000)}s`);
+            return null;
+        } catch (e) {
+            console.warn(`[Cache] Error reading ${type}:`, e);
+            return null;
+        }
+    };
+    
+    const setCachedData = async (type, data) => {
+        try {
+            const cacheKey = getCacheKey(type);
+            await AsyncStorage.setItem(cacheKey, JSON.stringify({
+                data,
+                timestamp: Date.now()
+            }));
+            console.log(`[Cache] Saved ${type}`);
+        } catch (e) {
+            console.warn(`[Cache] Error saving ${type}:`, e);
+        }
+    };
+
     const handleFetchObjects = async (isRefreshing = false) => {
         if (!filterOption) return;
         if(isRefreshing) setRefreshing(true);
         else setIsLoading(true);
 
-        // Fetch ALL objects for the hierarchy (no filter) so navigation works for all users' objects
-        // The filter will be applied only to what's displayed in localItems
-        const data = await apiFetchObjects('all');
-        if(data) {
-            setObjectsHierarchy(data);
-        }
+        try {
+            // Load from cache first (if not refreshing)
+            if (!isRefreshing) {
+                const cached = await getCachedData('objects');
+                if (cached) {
+                    console.log('[handleFetchObjects] Using cached objects');
+                    setObjectsHierarchy(cached);
+                    setIsLoading(false);
+                    return;
+                }
+            }
 
-        if(isRefreshing) setRefreshing(false);
-        else setIsLoading(false);
+            // Fetch fresh data
+            const data = await apiFetchObjects('all');
+            if(data) {
+                setObjectsHierarchy(data);
+                // Cache the fresh data
+                await setCachedData('objects', data);
+            }
+        } finally {
+            if(isRefreshing) setRefreshing(false);
+            else setIsLoading(false);
+        }
     };
 
     const handleFetchTemplates = async () => {
-        const data = await apiFetchTemplates();
-        if(data) {
-            setFetchedTemplates(data);
+        try {
+            // Try cache first
+            const cached = await getCachedData('templates');
+            if (cached) {
+                console.log('[handleFetchTemplates] Using cached templates');
+                setFetchedTemplates(cached);
+                return;
+            }
+
+            // Fetch fresh data
+            const data = await apiFetchTemplates();
+            if(data) {
+                setFetchedTemplates(data);
+                await setCachedData('templates', data);
+            }
+        } catch (e) {
+            console.error('[handleFetchTemplates] Error:', e);
         }
     };
 

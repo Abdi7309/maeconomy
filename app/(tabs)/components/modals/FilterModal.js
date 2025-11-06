@@ -1,4 +1,4 @@
-import { View, Text, Modal, TouchableOpacity, ScrollView } from 'react-native';
+import { Modal, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import AppStyles from '../../AppStyles';
 
 const FilterModal = ({ visible, onClose, allUsers, userToken, totalObjectCount, onSelectFilter }) => {
