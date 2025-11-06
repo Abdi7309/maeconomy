@@ -1,4 +1,4 @@
-import { ArrowRight, Check, Circle, GitBranch, Link as LinkIcon, Plus, Recycle, Trash2, X } from 'lucide-react-native';
+import { ArrowRight, Boxes, Check, GitBranch, Link as LinkIcon, Plus, Recycle, Trash2, X } from 'lucide-react-native';
 import { useMemo, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Modal, Platform, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import AppStyles, { colors } from '../../AppStyles';
@@ -6,7 +6,7 @@ import AttachExistingObjectsModal from './AttachExistingObjectsModal';
 
 // Material flow type options
 const MATERIAL_FLOW_TYPES = [
-    { key: 'default', label: 'Default', icon: Circle, color: colors.lightGray500, description: 'No specific flow type' },
+    { key: 'default', label: 'Objecten', icon: Boxes, color: colors.blue500, description: 'No specific flow type' },
     { key: 'raw_material', label: 'Raw Material', icon: Recycle, color: colors.blue600, description: 'Basic materials like steel, concrete' },
     { key: 'intermediate', label: 'Intermediate', icon: GitBranch, color: colors.purple600, description: 'Processed materials' },
     { key: 'component', label: 'Component', icon: ArrowRight, color: colors.lightGray600, description: 'Building parts' },

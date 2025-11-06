@@ -223,7 +223,9 @@ const App = () => {
         if(isRefreshing) setRefreshing(true);
         else setIsLoading(true);
 
-        const data = await apiFetchObjects(filterOption);
+        // Fetch ALL objects for the hierarchy (no filter) so navigation works for all users' objects
+        // The filter will be applied only to what's displayed in localItems
+        const data = await apiFetchObjects('all');
         if(data) {
             setObjectsHierarchy(data);
         }

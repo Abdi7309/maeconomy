@@ -1,4 +1,4 @@
-import { ArrowRight, Boxes, Calculator, Filter, GitBranch, LogOut, Menu, Plus, Recycle, Square } from 'lucide-react-native';
+import { ArrowRight, BarChart3, Boxes, Calculator, Filter, GitBranch, LogOut, Menu, Plus, Recycle } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Animated, Modal, Platform, RefreshControl, ScrollView, StatusBar, Text, TouchableOpacity, View } from 'react-native';
 import HierarchicalObjectsSkeletonList from '../../../components/HierarchicalObjectsSkeletonList';
@@ -31,11 +31,25 @@ const getMaterialFlowContext = (materialFlowType) => {
             return { type: 'final_product', icon: Plus, color: colors.blue700, label: 'Final Product' };
         case 'default':
         default:
-            return { type: 'default', icon: Square, color: colors.lightGray500, label: 'Default' };
+            return { type: 'default', icon: Boxes, color: colors.blue500, label: 'Objecten' };
     }
 };
 
 const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, setCurrentScreen, setSelectedProperty, setSelectedTempItem, handleLogout, onRefresh, refreshing, allUsers, userToken, totalObjectCount, filterOption, setFilterOption, onAddObject, objectsHierarchy, onFormuleSaved, isLoading, onTempObjectResolved }) => {
+    // Define getChildrenAtPath early so it can be used in lazy initializers
+    const getChildrenAtPath = (path) => {
+        let currentItems = objectsHierarchy;
+        if (!Array.isArray(path) || path.length === 0) return currentItems;
+        for (let i = 0; i < path.length; i++) {
+            const idToFind = path[i];
+            if (!Array.isArray(currentItems)) return [];
+            const item = currentItems.find((it) => it.id === idToFind);
+            if (!item) return [];
+            currentItems = Array.isArray(item.children) ? item.children : [];
+        }
+        return currentItems;
+    };
+
     const [showAddObjectModal, setShowAddObjectModal] = useState(false);
     const [addModalMode, setAddModalMode] = useState('single'); // 'single' | 'multiple'
     const [showFilterModal, setShowFilterModal] = useState(false);
@@ -117,11 +131,15 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
             return deduped;
         });
     }, [items, onTempObjectResolved]);
-    const [localObjectsHierarchy, setLocalObjectsHierarchy] = useState(objectsHierarchy || []);
-    // Keep localObjectsHierarchy in sync with prop updates
-    useEffect(() => {
-        setLocalObjectsHierarchy(objectsHierarchy || []);
-    }, [objectsHierarchy]);
+    const [localObjectsHierarchy, setLocalObjectsHierarchy] = useState(() => {
+        const next = getChildrenAtPath(currentLevelPath);
+        return Array.isArray(next) ? next : (objectsHierarchy || []);
+    });
+// Keep list in sync with the current path and backend updates
+useEffect(() => {
+    const next = getChildrenAtPath(currentLevelPath);
+    setLocalObjectsHierarchy(Array.isArray(next) ? next : []);
+}, [objectsHierarchy, currentLevelPath]);
 
     // Build grouped data (preserve encounter order, create separators for grouped items)
     const buildGroupedList = (items) => {
@@ -223,7 +241,83 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
         return out;
     };
 
-    const leftListData = useMemo(() => buildGroupedListSorted(localObjectsHierarchy), [localObjectsHierarchy, summaryMap]);
+    // ===== FILTERING HELPERS =====
+    // Normalize whatever FilterModal sends into a predictable shape
+    const normalizeFilter = (opt, userToken) => {
+        if (!opt || opt === 'all') return { all: true };
+
+        if (typeof opt === 'string') {
+            if (opt === 'mine') return { owner: userToken };
+            if (opt.startsWith('owner:')) return { owner: opt.split(':')[1] };
+            if (opt.startsWith('flow:')) return { flow: opt.split(':')[1] };
+            if (opt === 'has:props') return { hasProps: true };
+            if (opt === 'has:children') return { hasChildren: true };
+            // treat any other string as a free-text search
+            return { text: opt };
+        }
+
+        // object form coming from FilterModal
+        return {
+            all: opt.all || false,
+            owner: opt.owner === 'me' ? userToken : (opt.owner || undefined),
+            flow: opt.flow,
+            hasProps: !!opt.hasProps,
+            hasChildren: !!opt.hasChildren,
+            text: opt.text,
+        };
+    };
+
+    const applyFilter = (items, opt, userToken) => {
+        const f = normalizeFilter(opt, userToken);
+        if (!Array.isArray(items) || f.all) return items || [];
+
+        const match = (it) => {
+            if (!it) return false;
+
+            // owner check (support various fields)
+            if (f.owner) {
+                const ownerId = it.owner_id || it.user_id || it.created_by || it.ownerId;
+                if (ownerId !== f.owner) return false;
+            }
+
+            // flow type
+            if (f.flow) {
+                const t = (it.material_flow_type || 'default');
+                if (t !== f.flow) return false;
+            }
+
+            // properties?
+            if (f.hasProps) {
+                const pCount = (Array.isArray(it.properties) ? it.properties.length : 0) +
+                               (Array.isArray(it.eigenschappen) ? it.eigenschappen.length : 0);
+                if (pCount === 0) return false;
+            }
+
+            // children?
+            if (f.hasChildren) {
+                if (!Array.isArray(it.children) || it.children.length === 0) return false;
+            }
+
+            // text search on name
+            if (f.text) {
+                const q = String(f.text).toLowerCase();
+                const name = String(it.naam || '').toLowerCase();
+                if (!name.includes(q)) return false;
+            }
+
+            return true;
+        };
+
+        return items.filter(match);
+    };
+
+    // Build filtered list for the current level
+    const levelItems = useMemo(
+        () => applyFilter(localObjectsHierarchy, filterOption, userToken),
+        [localObjectsHierarchy, filterOption, userToken]
+    );
+
+    const leftListData = useMemo(() => buildGroupedListSorted(levelItems), [levelItems, summaryMap]);
     // Track how user navigated into the current level to influence breadcrumb labels
     const selectionContextRef = useRef({ pathKey: '', preferSoloLabel: false });
     // Ref for the breadcrumb ScrollView so we can auto-scroll to show the current crumb
@@ -325,6 +419,8 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
         }
         // Add to localItems
         setLocalItems((prev) => [...newObjects, ...prev]);
+        // Also reflect in the current level view instantly
+        setLocalObjectsHierarchy((prev) => [...newObjects, ...(prev || [])]);
         // ASYNC DB SAVE
         try {
             const res = await withTimeout(onAddObject(...args), 20000, 'add-object');
@@ -510,19 +606,6 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
     };
 
     // Helpers to compute grouped breadcrumb labels
-    const getChildrenAtPath = (path) => {
-        let currentItems = objectsHierarchy;
-        if (!Array.isArray(path) || path.length === 0) return currentItems;
-        for (let i = 0; i < path.length; i++) {
-            const idToFind = path[i];
-            if (!Array.isArray(currentItems)) return [];
-            const item = currentItems.find((it) => it.id === idToFind);
-            if (!item) return [];
-            currentItems = Array.isArray(item.children) ? item.children : [];
-        }
-        return currentItems;
-    };
-
     const getGroupLabelForPath = (path) => {
         if (!path || path.length === 0) return 'Objecten';
         const pathKey = path.join('/');
@@ -1030,7 +1113,9 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                                         onPress={() => {
                                             if (index !== breadcrumbs.length - 1) {
                                                 setCurrentPath(crumb.path);
-                                            }
+                                                const next = getChildrenAtPath(crumb.path);
+                                                setLocalObjectsHierarchy(Array.isArray(next) ? next : []);
+                                                }
                                         }}
                                         style={{ flexDirection: 'row', alignItems: 'center' }}
                                     >
@@ -1079,14 +1164,6 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                     >
                         <LogOut color={colors.blue600} size={24} />
                     </TouchableOpacity>
-                    {/* Summary button (temporary, aggregates all properties) */}
-                    <TouchableOpacity
-                        onPress={() => openSummaryAll()}
-                        style={{ padding: 8, marginLeft: 8, backgroundColor: 'transparent', borderRadius: 6 }}
-                        activeOpacity={0.7}
-                    >
-                        <Calculator color={colors.blue600} size={22} />
-                    </TouchableOpacity>
                 </View>
             </View>
             <ScrollView
@@ -1104,26 +1181,27 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                                 <Text style={{ marginTop: 12, color: colors.lightGray600 }}>Loading…</Text>
                             </View>
                         )
-                    ) : localItems.length > 0 ? (
-                        // ...existing code for rendering object cards...
-                        (Object.values(
-                            (localItems || []).reduce((acc, it) => {
-                                const ik = it.__instanceKey || '';
-                                const key = it.group_key ? `grp:${it.group_key}` : `solo:${ik || it.id}`;
-                                if (!acc[key]) acc[key] = { group_key: it.group_key || null, items: [] };
-                                acc[key].items.push(it);
-                                return acc;
-                            }, {})
-                        )
-                            .map((group) => {
-                                const times = group.items
-                                    .map((it) => new Date(it.created_at || it.updated_at || Date.now()).getTime())
-                                    .filter((t) => Number.isFinite(t));
-                                const sortKey = times.length ? Math.min(...times) : Number.MAX_SAFE_INTEGER;
-                                return { ...group, sortKey };
-                            })
-                            .sort((a, b) => a.sortKey - b.sortKey)
-                        ).flatMap((group) => {
+                    ) : (
+                        (() => {
+                            const renderedCards = (levelItems && levelItems.length > 0) ? (Object.values(
+                                (levelItems || []).reduce((acc, it) => {
+                                    const ik = it.__instanceKey || '';
+                                    const key = it.group_key ? `grp:${it.group_key}` : `solo:${ik || it.id}`;
+                                    if (!acc[key]) acc[key] = { group_key: it.group_key || null, items: [] };
+                                    acc[key].items.push(it);
+                                    return acc;
+                                }, {})
+                            )
+                                .map((group) => {
+                                    const times = group.items
+                                        .map((it) => new Date(it.created_at || it.updated_at || Date.now()).getTime())
+                                        .filter((t) => Number.isFinite(t));
+                                    const sortKey = times.length ? Math.min(...times) : Number.MAX_SAFE_INTEGER;
+                                    return { ...group, sortKey };
+                                })
+                                .sort((a, b) => a.sortKey - b.sortKey)
+                                .filter((group) => group.items && group.items.length > 0)
+                            ).flatMap((group) => {
                             // ...existing code for rendering each group/card...
                             const anchorId = group.items[0]?.id;
                             const pathKey = (currentLevelPath && currentLevelPath.length) ? currentLevelPath.join('/') : 'root';
@@ -1156,6 +1234,8 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                                                     const nextPath = [...currentLevelPath, anchorId];
                                                     selectionContextRef.current = { pathKey: nextPath.join('/'), preferSoloLabel: false };
                                                     setCurrentPath(nextPath);
+                                            const next = getChildrenAtPath(nextPath);
+                                            setLocalObjectsHierarchy(Array.isArray(next) ? next : []);
                                                 }}
                                             >
                                                 <View style={AppStyles.cardFlex}>
@@ -1209,6 +1289,12 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                             }
                             // ...existing code for solo cards...
                             const primary = group.items[0];
+                            
+                            // Skip rendering if primary is empty or has no naam
+                            if (!primary || !primary.naam) {
+                                return [];
+                            }
+                            
                             const title = primary.naam;
                             const totalProperties = (primary.properties || []).length;
                             const totalChildren = (primary.children || []).length;
@@ -1224,6 +1310,8 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                                             const nextPath = [...currentLevelPath, primary.id];
                                             selectionContextRef.current = { pathKey: nextPath.join('/'), preferSoloLabel: true };
                                             setCurrentPath(nextPath);
+                                            const next = getChildrenAtPath(nextPath);
+                                            setLocalObjectsHierarchy(Array.isArray(next) ? next : []);
                                         }}
                                     >
                                         <View style={AppStyles.cardFlex}>
@@ -1267,14 +1355,18 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                                     </TouchableOpacity>
                                 ),
                             ];
-                        })
-                    ) : (
-                        <View style={AppStyles.emptyState}>
-                            <Text style={AppStyles.emptyStateText}>No items found for this filter.</Text>
-                            <Text style={AppStyles.emptyStateSubtext}>
-                                Try a different filter or add a new item.
-                            </Text>
-                        </View>
+                        }) : [];
+                            return renderedCards && renderedCards.length > 0 ? renderedCards : (
+                                <View style={AppStyles.emptyState}>
+                                    <Text style={AppStyles.emptyStateText}>No items found for this filter.</Text>
+                                    <Text style={AppStyles.emptyStateSubtext}>
+                                        {filterOption && filterOption !== 'all' 
+                                            ? 'No objects match the selected filter. Try a different filter or create a new item.'
+                                            : 'Try a different filter or add a new item.'}
+                                    </Text>
+                                </View>
+                            );
+                        })()
                     )}
                 </View>
             </ScrollView>
@@ -1295,7 +1387,44 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                 />
             )}
             
-            {/* Filter Button */}
+            {/* Summary Button */}
+            <Animated.View
+                style={[
+                    AppStyles.filterFab,
+                    { 
+                        bottom: 257,
+                        transform: [
+                            {
+                                translateY: fabMenuAnimation.interpolate({
+                                    inputRange: [0, 1],
+                                    outputRange: [228, 0],
+                                })
+                            },
+                            {
+                                scale: fabMenuAnimation.interpolate({
+                                    inputRange: [0, 1],
+                                    outputRange: [0, 1],
+                                })
+                            }
+                        ],
+                        opacity: fabMenuAnimation
+                    }
+                ]}
+                pointerEvents={fabMenuOpen ? 'auto' : 'none'}
+            >
+                <TouchableOpacity 
+                    onPress={() => {
+                        closeFabMenu();
+                        setShowSummaryModal(true);
+                        openSummaryAll();
+                    }} 
+                    style={{ width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' }}
+                >
+                    <BarChart3 color={colors.blue600} size={24} />
+                </TouchableOpacity>
+            </Animated.View>
+
+            {/* Formula Button */}
             <Animated.View
                 style={[
                     AppStyles.filterFab,
@@ -1323,15 +1452,15 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                 <TouchableOpacity 
                     onPress={() => {
                         closeFabMenu();
-                        setShowFilterModal(true);
+                        setShowFormulePickerModal(true);
                     }} 
                     style={{ width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' }}
                 >
-                    <Filter color={colors.blue600} size={24} />
+                    <Calculator color={colors.blue600} size={24} />
                 </TouchableOpacity>
             </Animated.View>
             
-            {/* Formula Button */}
+            {/* Filter Button */}
             <Animated.View
                 style={[
                     AppStyles.filterFab,
@@ -1359,11 +1488,11 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                 <TouchableOpacity 
                     onPress={() => {
                         closeFabMenu();
-                        setShowFormulePickerModal(true);
+                        setShowFilterModal(true);
                     }} 
                     style={{ width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' }}
                 >
-                    <Calculator color={colors.blue600} size={24} />
+                    <Filter color={colors.blue600} size={24} />
                 </TouchableOpacity>
             </Animated.View>
 

@@ -500,7 +500,7 @@ export const fetchAndSetAllObjects = async (filterOption) => {
             if (!linkErr && lr && lr.length) {
                 const ids = Array.from(new Set(lr.map(r => r.child_id)))
                 if (ids.length) {
-                    const { data: linkedObjs, error: linkedFetchErr } = await supabase
+                    let linkedQuery = supabase
                         .from('objects')
                         .select(`
                             *,
@@ -511,6 +511,13 @@ export const fetchAndSetAllObjects = async (filterOption) => {
                         `)
                         .in('id', ids)
                         .order('naam')
+                    
+                    // Apply the same filter as direct objects
+                    if (filterOption && filterOption !== 'all') {
+                        linkedQuery = linkedQuery.eq('user_id', filterOption)
+                    }
+                    
+                    const { data: linkedObjs, error: linkedFetchErr } = await linkedQuery
                     if (!linkedFetchErr && Array.isArray(linkedObjs)) {
                         const map = new Map(linkedObjs.map(o => [o.id, o]))
                         linkedTop = lr.map(r => ({ ...map.get(r.child_id), __instanceKey: `rootlink:${r.id}`, group_key: r.group_key || map.get(r.child_id)?.group_key || null })).filter(Boolean)

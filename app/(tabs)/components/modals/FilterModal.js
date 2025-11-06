@@ -24,11 +24,11 @@ const FilterModal = ({ visible, onClose, allUsers, userToken, totalObjectCount, 
                         <TouchableOpacity style={AppStyles.filterOptionButton} onPress={() => handleSelect('all')}>
                             <Text style={AppStyles.filterOptionText}>{`All Objects (${totalObjectCount})`}</Text>
                         </TouchableOpacity>
-                         <TouchableOpacity style={AppStyles.filterOptionButton} onPress={() => handleSelect(userToken)}>
+                         <TouchableOpacity style={AppStyles.filterOptionButton} onPress={() => handleSelect(`owner:${userToken}`)}>
                             <Text style={AppStyles.filterOptionText}>{`My Objects (${myObjectsCount})`}</Text>
                         </TouchableOpacity>
                         {allUsers.filter(u => u.id !== userToken).map(user => (
-                            <TouchableOpacity key={user.id} style={AppStyles.filterOptionButton} onPress={() => handleSelect(user.id)}>
+                            <TouchableOpacity key={user.id} style={AppStyles.filterOptionButton} onPress={() => handleSelect(`owner:${user.id}`)}>
                                 <Text style={AppStyles.filterOptionText}>{`Objects from ${user.username} (${user.object_count})`}</Text>
                             </TouchableOpacity>
                         ))}

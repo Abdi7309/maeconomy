@@ -233,40 +233,41 @@ const SummaryModal = (props) => {
     return (
         <Modal transparent visible={visible} onRequestClose={() => {}}>
             <TouchableOpacity activeOpacity={1} onPress={() => {}} style={AppStyles.modalOverlay}>
-                <View style={[AppStyles.modalContainer, { maxWidth: 900, width: '96%', padding: 12, maxHeight: '90%', overflow: 'hidden' }]}>
-                    <Text style={AppStyles.modalTitle}>Samenvatting — {summaryPropertyName}</Text>
-                    <Text style={{ color: colors.lightGray600, marginTop: 6 }}>Tijdelijke berekening (niet opgeslagen)</Text>
+                <View style={[AppStyles.modalContainer, { maxWidth: 900, width: '96%', padding: 12, maxHeight: '90%', flexDirection: 'column' }]}>
+                    <ScrollView style={{ flex: 1, marginBottom: 12 }} showsVerticalScrollIndicator={true}>
+                        <Text style={AppStyles.modalTitle}>Samenvatting — {summaryPropertyName}</Text>
+                        <Text style={{ color: colors.lightGray600, marginTop: 6 }}>Tijdelijke berekening (niet opgeslagen)</Text>
 
-                    <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-                        <TouchableOpacity
-                            onPress={() => setViewMode('hierarchy')}
-                            style={{
-                                paddingVertical: 6,
-                                paddingHorizontal: 12,
-                                borderRadius: 20,
-                                borderWidth: 1,
-                                borderColor: viewMode === 'hierarchy' ? colors.blue600 : colors.lightGray300,
-                                backgroundColor: viewMode === 'hierarchy' ? colors.blue100 : colors.white,
-                            }}
-                        >
-                            <Text style={{ color: viewMode === 'hierarchy' ? colors.blue700 : colors.lightGray700, fontWeight: '600' }}>Hierarchie</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            onPress={() => setViewMode('flow')}
-                            style={{
-                                paddingVertical: 6,
-                                paddingHorizontal: 12,
-                                borderRadius: 20,
-                                borderWidth: 1,
-                                borderColor: viewMode === 'flow' ? colors.blue600 : colors.lightGray300,
-                                backgroundColor: viewMode === 'flow' ? colors.blue100 : colors.white,
-                            }}
-                        >
-                            <Text style={{ color: viewMode === 'flow' ? colors.blue700 : colors.lightGray700, fontWeight: '600' }}>Processtroom</Text>
-                        </TouchableOpacity>
-                    </View>
+                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+                            <TouchableOpacity
+                                onPress={() => setViewMode('hierarchy')}
+                                style={{
+                                    paddingVertical: 6,
+                                    paddingHorizontal: 12,
+                                    borderRadius: 20,
+                                    borderWidth: 1,
+                                    borderColor: viewMode === 'hierarchy' ? colors.blue600 : colors.lightGray300,
+                                    backgroundColor: viewMode === 'hierarchy' ? colors.blue100 : colors.white,
+                                }}
+                            >
+                                <Text style={{ color: viewMode === 'hierarchy' ? colors.blue700 : colors.lightGray700, fontWeight: '600' }}>Hierarchie</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                onPress={() => setViewMode('flow')}
+                                style={{
+                                    paddingVertical: 6,
+                                    paddingHorizontal: 12,
+                                    borderRadius: 20,
+                                    borderWidth: 1,
+                                    borderColor: viewMode === 'flow' ? colors.blue600 : colors.lightGray300,
+                                    backgroundColor: viewMode === 'flow' ? colors.blue100 : colors.white,
+                                }}
+                            >
+                                <Text style={{ color: viewMode === 'flow' ? colors.blue700 : colors.lightGray700, fontWeight: '600' }}>Processtroom</Text>
+                            </TouchableOpacity>
+                        </View>
 
-                    <View key={`mode-${viewMode}`} style={{ marginTop: 12, maxHeight: contentMaxHeight, flexDirection: 'row', gap: 12 }}>
+                        <View key={`mode-${viewMode}`} style={{ marginTop: 12, flexDirection: 'row', gap: 12 }}>
                         <View style={{ width: '40%', borderRightWidth: 1, borderRightColor: colors.lightGray200, paddingRight: 12 }}>
                             <Text style={{ fontWeight: '700', marginBottom: 8 }}>
                                 {viewMode === 'hierarchy' ? 'Top-level objecten' : 'Processtroom objecten'}
@@ -829,6 +830,7 @@ const SummaryModal = (props) => {
                             )}
                         </View>
                     </View>
+                    </ScrollView>
 
                     <View style={[AppStyles.modalActions, { marginTop: 12, justifyContent: 'flex-end' }]}> 
                         <TouchableOpacity onPress={() => { onClose(); }} style={AppStyles.btnPrimary}>
