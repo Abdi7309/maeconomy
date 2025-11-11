@@ -1,6 +1,6 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, View } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
     handleAddObject as apiAddObject,
     addProperties as apiAddProperties,

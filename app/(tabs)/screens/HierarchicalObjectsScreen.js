@@ -114,57 +114,109 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
     const [rightPage, setRightPage] = useState(1);
     // Local state for instant UI update
     const [localItems, setLocalItems] = useState(items || []);
+    // Retention map: dbId -> { expires: number (ms timestamp), created_at: string }
+    // Ensures freshly added items stay visually at the top for a short period and keep temp-created timestamp
+    const recentRetentionRef = useRef(new Map());
+    const RETENTION_MS = 6500; // keep new items at top & highlighted for ~6.5s
     // Keep localItems in sync with items prop (database objects)
     useEffect(() => {
-        // If there are temporary objects, swap them with matching database objects
+        // Merge incoming items while retaining optimistic temp objects & highlighting recent creations
         const resolutions = [];
         setLocalItems((prevLocal) => {
-            console.log('[HierarchicalObjectsScreen] Syncing items. prevLocal count:', prevLocal?.length, 'incoming items count:', items?.length);
-            // Do NOT drop optimistic items if incoming items are empty; keep previous state
-            if (!items || items.length === 0) {
-                console.log('[HierarchicalObjectsScreen] Incoming items empty, keeping previous');
-                return prevLocal || [];
-            }
-            // Find temp objects by id prefix
-            const tempObjects = prevLocal.filter(obj => typeof obj.id === 'string' && obj.id.startsWith('temp_'));
-            console.log('[HierarchicalObjectsScreen] Found temp objects:', tempObjects.map(t => t.id));
-            if (tempObjects.length === 0) return items;
-            // For each temp object, try to find a matching db object by name and groupKey
-            let merged = [...items];
-            tempObjects.forEach(tempObj => {
-                const matchIdx = merged.findIndex(dbObj =>
-                    dbObj.naam === tempObj.naam &&
-                    (dbObj.group_key || null) === (tempObj.group_key || null)
-                );
-                console.log('[HierarchicalObjectsScreen] Looking for match for temp', tempObj.id, 'naam:', tempObj.naam, 'found:', matchIdx >= 0);
-                if (matchIdx === -1) {
-                    // If not found, keep temp object at the top
-                    merged = [tempObj, ...merged];
-                } else {
-                    console.log('[HierarchicalObjectsScreen] Matched temp', tempObj.id, 'to DB', merged[matchIdx].id);
-                    resolutions.push({ tempId: tempObj.id, dbId: merged[matchIdx].id });
+            try {
+                const now = Date.now();
+                console.log('[HierarchicalObjectsScreen] Sync start. prevLocal=', prevLocal?.length, 'incoming=', items?.length);
+                if (!items || items.length === 0) {
+                    // When backend returns empty, reflect it to avoid showing stale data
+                    console.log('[HierarchicalObjectsScreen] Incoming empty; clearing localItems');
+                    return [];
                 }
-            });
-            // Remove duplicate temp objects if db version exists
-            const deduped = merged.filter((obj, idx, arr) => {
-                if (typeof obj.id === 'string' && obj.id.startsWith('temp_')) {
-                    // If a db version exists, skip temp
-                    return arr.findIndex(o => o.naam === obj.naam && (o.group_key || null) === (obj.group_key || null) && !(typeof o.id === 'string' && o.id.startsWith('temp_'))) === -1;
-                }
-                return true;
-            });
-            // Notify app asynchronously so we don't run side-effects inside state updater
-            if (resolutions.length && typeof onTempObjectResolved === 'function') {
-                console.log('[HierarchicalObjectsScreen] Scheduling resolution callbacks:', resolutions);
-                setTimeout(() => {
-                    resolutions.forEach(({ tempId, dbId }) => {
-                        console.log('[HierarchicalObjectsScreen] Calling onTempObjectResolved', { tempId, dbId });
-                        try { onTempObjectResolved(tempId, dbId); } catch (e) { console.error('[HierarchicalObjectsScreen] Resolution callback error:', e); }
+                const tempObjects = (prevLocal || []).filter(o => typeof o.id === 'string' && o.id.startsWith('temp_'));
+                let merged = [...items];
+                // Attach retention/highlight info to existing DB items if within retention window
+                merged = merged.map(dbObj => {
+                    const r = recentRetentionRef.current.get(dbObj.id);
+                    if (r && r.expires > now) {
+                        // Preserve optimistic ordering by faking a recent created_at & mark highlight
+                        return { ...dbObj, created_at: r.created_at, __justCreated: true };
+                    }
+                    return dbObj;
+                });
+                if (tempObjects.length === 0) {
+                    // Sort so recently retained items appear first
+                    const sorted = merged.sort((a,b)=>{
+                        const at = new Date(a.created_at || 0).getTime();
+                        const bt = new Date(b.created_at || 0).getTime();
+                        return bt - at; // newest first
                     });
-                }, 0);
+                    return sorted;
+                }
+                tempObjects.forEach(tempObj => {
+                    const matchIdx = merged.findIndex(dbObj => dbObj.naam === tempObj.naam && (dbObj.group_key || null) === (tempObj.group_key || null));
+                    if (matchIdx === -1) {
+                        // Keep temp optimistic item at top until resolved or timeout external logic
+                        merged.unshift({ ...tempObj, __justCreated: true });
+                    } else {
+                        // We matched a DB object to a temp; prefer DB but keep recent highlight & optimistic timestamp
+                        const dbObj = merged[matchIdx];
+                        resolutions.push({ tempId: tempObj.id, dbId: dbObj.id });
+                        const r = recentRetentionRef.current.get(dbObj.id);
+                        merged[matchIdx] = {
+                            ...dbObj,
+                            created_at: r ? r.created_at : tempObj.created_at || dbObj.created_at,
+                            __justCreated: true,
+                        };
+                    }
+                });
+                // Remove duplicate temps that now have DB counterpart beyond retention window
+                const deduped = merged.filter(obj => {
+                    if (typeof obj.id === 'string' && obj.id.startsWith('temp_')) {
+                        // If any DB with same name+group exists and retention period for the temp has expired, drop
+                        const dbExists = merged.some(o => !(typeof o.id === 'string' && o.id.startsWith('temp_')) && o.naam === obj.naam && (o.group_key || null) === (obj.group_key || null));
+                        const tempCreatedTs = new Date(obj.created_at || 0).getTime();
+                        if (dbExists) {
+                            const age = now - tempCreatedTs;
+                            if (age > RETENTION_MS) return false; // drop after retention
+                        }
+                    }
+                    return true;
+                });
+                // Sort newest first (retained items have recent created_at)
+                deduped.sort((a,b)=>{
+                    const at = new Date(a.created_at || 0).getTime();
+                    const bt = new Date(b.created_at || 0).getTime();
+                    return bt - at;
+                });
+                if (resolutions.length) {
+                    setTimeout(() => {
+                        resolutions.forEach(({ tempId, dbId }) => {
+                            // Record mapping globally so other screens (e.g., Properties) can migrate optimistic state
+                            try {
+                                if (typeof globalThis !== 'undefined') {
+                                    const g = globalThis;
+                                    if (!g.__tempObjectResolutionMap) g.__tempObjectResolutionMap = new Map();
+                                    g.__tempObjectResolutionMap.set(tempId, dbId);
+                                    // Migrate optimistic property cache from temp -> db id
+                                    const propCache = g.__tempPropertiesCache?.map;
+                                    if (propCache && propCache.has(tempId)) {
+                                        const entry = propCache.get(tempId);
+                                        propCache.set(dbId, entry);
+                                        propCache.delete(tempId);
+                                    }
+                                }
+                            } catch (e) {
+                                console.warn('[HierarchicalObjectsScreen] Failed to record temp->db mapping', e);
+                            }
+                            try { if (typeof onTempObjectResolved === 'function') onTempObjectResolved(tempId, dbId); } catch (e) { console.error('[HierarchicalObjectsScreen] onTempObjectResolved error:', e); }
+                        });
+                    }, 0);
+                }
+                console.log('[HierarchicalObjectsScreen] Sync complete. final=', deduped.length);
+                return deduped;
+            } catch (e) {
+                console.error('[HierarchicalObjectsScreen] Sync merge error', e);
+                return items;
             }
-            console.log('[HierarchicalObjectsScreen] Returning deduped items, count:', deduped.length);
-            return deduped;
         });
     }, [items, onTempObjectResolved]);
     const [localObjectsHierarchy, setLocalObjectsHierarchy] = useState(() => {
@@ -180,11 +232,38 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
 // PERFORMANCE: Use filter cache to avoid re-filtering on path changes alone
 useEffect(() => {
     const next = getChildrenAtPath(currentLevelPath);
-    const pathKey = currentLevelPath?.join('/') || 'root';
     const base = Array.isArray(next) ? next : [];
-    // Don't filter here - just get the base items for the current level
-    // Filtering will be applied in levelItems useMemo below
-    setLocalObjectsHierarchy(base);
+    const now = Date.now();
+    // Merge base with any recent temp items from previous local state to avoid flicker
+    setLocalObjectsHierarchy((prev) => {
+        try {
+            const prevTemps = (prev || []).filter(o => typeof o?.id === 'string' && o.id.startsWith('temp_'));
+            if (!prevTemps.length) return base;
+            // Build a working copy we can mutate
+            const merged = [...base];
+            prevTemps.forEach(temp => {
+                const age = now - new Date(temp.created_at || 0).getTime();
+                if (age > RETENTION_MS) return; // skip old temps
+                const matchIdx = merged.findIndex(dbObj => dbObj.naam === temp.naam && (dbObj.group_key || null) === (temp.group_key || null));
+                if (matchIdx === -1) {
+                    // Still no DB version: keep temp visible at top
+                    merged.unshift(temp);
+                } else {
+                    // Replace DB version but keep the same card key and timestamp for a smooth handoff
+                    merged[matchIdx] = {
+                        ...merged[matchIdx],
+                        created_at: temp.created_at || merged[matchIdx].created_at,
+                        __instanceKey: temp.__instanceKey || temp.id,
+                        __justCreated: true,
+                    };
+                }
+            });
+            return merged;
+        } catch (e) {
+            console.warn('[level merge] failed, using base', e);
+            return base;
+        }
+    });
 }, [objectsHierarchy, currentLevelPath]);
 
 // PERFORMANCE: Clear filter cache when hierarchy changes
@@ -600,13 +679,30 @@ useEffect(() => {
                 if (Array.isArray(res?.ids) && res.ids.length) {
                     injectedTempIds.forEach((tempId, idx) => {
                         const dbId = res.ids[idx];
-                        if (dbId && onTempObjectResolved) {
+                        if (!dbId) return;
+                        // Record retention so item stays highlighted & ordered as "new" for window
+                        const tempObj = newObjects.find(o => o.id === tempId);
+                        const created_at = tempObj?.created_at || new Date().toISOString();
+                        recentRetentionRef.current.set(dbId, { expires: Date.now() + RETENTION_MS, created_at });
+                        // Record temp->db mapping globally and migrate optimistic property cache if present
+                        try {
+                            if (typeof globalThis !== 'undefined') {
+                                const g = globalThis;
+                                if (!g.__tempObjectResolutionMap) g.__tempObjectResolutionMap = new Map();
+                                g.__tempObjectResolutionMap.set(tempId, dbId);
+                                const propCache = g.__tempPropertiesCache?.map;
+                                if (propCache && propCache.has(tempId)) {
+                                    const entry = propCache.get(tempId);
+                                    propCache.set(dbId, entry);
+                                    propCache.delete(tempId);
+                                }
+                            }
+                        } catch (_) { /* ignore */ }
+                        if (onTempObjectResolved) {
                             onTempObjectResolved(tempId, dbId);
                         }
-                        if (dbId) {
-                            // Optimistically replace temp id with real id in local list
-                            setLocalItems((prev) => prev.map((o) => o.id === tempId ? { ...o, id: dbId } : o));
-                        }
+                        // Replace temp id with dbId but keep created_at, stable instance key & mark justCreated
+                        setLocalItems((prev) => prev.map((o) => o.id === tempId ? { ...o, id: dbId, created_at, __instanceKey: o.__instanceKey || tempId, __justCreated: true } : o));
                     });
                 }
             } catch (_) { /* ignore */ }
@@ -1381,7 +1477,7 @@ useEffect(() => {
                                         return (
                                             <TouchableOpacity
                                                 key={`${pathKey}-group-${group.group_key}-${it.__instanceKey || it.id}-${idx}`}
-                                                style={[AppStyles.card, AppStyles.cardGroupMember]}
+                                                style={[AppStyles.card, AppStyles.cardGroupMember, it.__justCreated && { backgroundColor: colors.blue50, borderColor: colors.blue200, borderWidth: 1 }]}
                                                 onPress={() => {
                                                     handleCardPress(anchorId, true);
                                                 }}
@@ -1447,7 +1543,7 @@ useEffect(() => {
                                 (
                                     <TouchableOpacity
                                         key={`${pathKey}-solo-${primary.__instanceKey || primary.id}`}
-                                        style={AppStyles.card}
+                                        style={[AppStyles.card, primary.__justCreated && { backgroundColor: colors.blue50, borderColor: colors.blue200, borderWidth: 1 }]}
                                         onPress={() => {
                                             handleCardPress(primary.id, false);
                                         }}

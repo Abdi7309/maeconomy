@@ -10,6 +10,8 @@ import EditPropertyModal from '../components/modals/EditPropertyModal';
 import TemplatePickerModal from '../components/modals/TemplatePickerModal';
 import ValueInputModal from '../components/modals/ValueInputModal';
 
+import WaardeInput from '../components/WaardeInput';
+
 const buildPropertiesMap = (properties, outputUnit) => {
     const map = {};
 
@@ -109,6 +111,18 @@ const evaluateFormule = (Formule, properties) => {
         return valueInL.toString();
     });
 
+    // Handle area units (normalize to m²)
+    expression = expression.replace(/(\d+(?:\.\d+)?)\s*(m²|cm²|mm²)\b/gi, (match, num, unit) => {
+        const valueInM2 = convertToUnit(parseFloat(num), unit, 'm²');
+        return valueInM2.toString();
+    });
+
+    // Handle cubic meters units (normalize to m³) if explicitly used
+    expression = expression.replace(/(\d+(?:\.\d+)?)\s*(m³)\b/gi, (match, num, unit) => {
+        const valueInM3 = convertToUnit(parseFloat(num), unit, 'm³');
+        return valueInM3.toString();
+    });
+
     try {
         if (/[^0-9+\-*/().\s]/.test(expression)) {
             return { value: null, error: 'Onbekende variabelen in formule' };
@@ -125,21 +139,70 @@ const evaluateFormule = (Formule, properties) => {
 };
 
 const unitConversionTable = {
-    // Length
+    // Length (linear)
     m:    { m: 1, cm: 0.01, mm: 0.001 },
     cm:   { m: 100, cm: 1, mm: 0.1 },
     mm:   { m: 1000, cm: 10, mm: 1 },
+    // Area (squared)
+    'm²': { 'm²': 1, 'cm²': 0.0001, 'mm²': 0.000001 }, // cm² = (0.01 m)^2, mm² = (0.001 m)^2
+    'cm²': { 'm²': 10000, 'cm²': 1, 'mm²': 0.01 },     // 1 cm² = 100 mm²
+    'mm²': { 'm²': 1000000, 'cm²': 100, 'mm²': 1 },
+    // Volume (cubic + metric liquid)
+    'm³': { 'm³': 1, L: 0.001, mL: 0.000001 },         // 1 L = 0.001 m³, 1 mL = 1e-6 m³
+    L:    { 'm³': 1000, L: 1, mL: 0.001 },             // 1 m³ = 1000 L
+    mL:   { 'm³': 1000000, L: 1000, mL: 1 },
     // Mass
     kg:   { kg: 1, g: 0.001 },
-    g:    { kg: 1000, g: 1 },
-    // Volume
-    L:    { L: 1, mL: 0.001 },
-    mL:   { L: 1000, mL: 1 }
+    g:    { kg: 1000, g: 1 }
 };
 
+// Normalize units to match keys (handle superscripts and L/mL casing)
+const sanitizeUnit = (u) => u
+    ?.replace(/m\^2/i, 'm²')
+    ?.replace(/m\^3/i, 'm³')
+    ?.replace(/^l$/i, 'L')
+    ?.replace(/^ml$/i, 'mL')
+    ?.replace('²', '²')
+    ?.replace('³', '³');
+
 const convertToUnit = (value, fromUnit, toUnit) => {
-    if (!fromUnit || !toUnit || !unitConversionTable[toUnit] || !unitConversionTable[toUnit][fromUnit]) return value;
-    return value * unitConversionTable[toUnit][fromUnit];
+    const f = sanitizeUnit(fromUnit);
+    const t = sanitizeUnit(toUnit);
+    if (!f || !t || !unitConversionTable[t] || !unitConversionTable[t][f]) return value;
+    return value * unitConversionTable[t][f];
+};
+
+// ===== Optimistic Property Cache (shared globally) =====
+// Structure: globalThis.__tempPropertiesCache = { map: Map<objectId, { props: [], expires: number }>, expiryMs }
+const ensureOptimisticPropCache = () => {
+    try {
+        const g = globalThis;
+        if (!g.__tempPropertiesCache) {
+            g.__tempPropertiesCache = { map: new Map(), expiryMs: 9000 }; // 9s default retention
+        } else {
+            if (!g.__tempPropertiesCache.map) g.__tempPropertiesCache.map = new Map();
+            if (!g.__tempPropertiesCache.expiryMs) g.__tempPropertiesCache.expiryMs = 9000;
+        }
+        return g.__tempPropertiesCache;
+    } catch (_) {
+        return { map: new Map(), expiryMs: 9000 };
+    }
+};
+
+const addOptimisticProperties = (objectId, props) => {
+    if (!objectId || !props || !props.length) return;
+    const cache = ensureOptimisticPropCache();
+    const now = Date.now();
+    const existing = cache.map.get(objectId) || { props: [], expires: now + cache.expiryMs };
+    const mergedMap = new Map();
+    // Keep existing first
+    existing.props.forEach(p => mergedMap.set(p.id || `name:${(p.name||'').toLowerCase()}`, p));
+    // Add new optimistic ones
+    props.forEach(p => {
+        const key = p.id || `name:${(p.name||'').toLowerCase()}`;
+        mergedMap.set(key, { ...p, __optimistic: true, __createdAt: now });
+    });
+    cache.map.set(objectId, { props: Array.from(mergedMap.values()), expires: now + cache.expiryMs });
 };
 
 const AddPropertyScreen = ({ ...props }) => {
@@ -181,7 +244,7 @@ const AddPropertyScreen = ({ ...props }) => {
 
     if (!item) return null;
 
-    const allUnits = ['m', 'cm', 'mm', 'kg', 'g', 'L', 'mL'];
+    const allUnits = ['m', 'cm', 'mm', 'm²', 'cm²', 'mm²', 'm³', 'kg', 'g', 'L', 'mL'];
 
     // Consistent rounding with modal
     const DECIMAL_PLACES = 6;
@@ -237,27 +300,37 @@ const AddPropertyScreen = ({ ...props }) => {
 
 
 
-    const handleOpenValueInput = (propertyId) => {
+    const handleOpenValueInput = async (propertyId) => {
         setValueInputPropertyId(propertyId);
+        // Refresh formulas right before opening to avoid stale/empty lists
+        try {
+            const fresh = await fetchFormulesApi();
+            setFormules(Array.isArray(fresh) ? fresh : []);
+        } catch (e) {
+            console.warn('Failed to refresh formules before opening modal:', e);
+        }
         setShowValueInputModal(true);
     };
 
     const handleValueInputSet = (value, formule) => {
         if (valueInputPropertyId !== null) {
             if (formule && !formule.isManual) {
-                // If a predefined formule was selected, evaluate it and store the result
+                // Always store the chosen formula expression and metadata first
+                handlePropertyFieldChange(valueInputPropertyId, 'Formule_expression', value);
+                handlePropertyFieldChange(valueInputPropertyId, 'Formule_id', formule.id);
+                handlePropertyFieldChange(valueInputPropertyId, 'unit', ''); // Predefined formulas don't have units by default
+
+                // Try to evaluate the formula; if it fails, keep the expression visible
                 const evaluation = evaluateFormule(value, newPropertiesList);
-                
-                if (evaluation.error) {
-                    // Show error message to user
-                    Alert.alert('Formule Fout', evaluation.error);
-                    return;
+                if (!evaluation?.error && typeof evaluation.value === 'number') {
+                    handlePropertyFieldChange(
+                        valueInputPropertyId,
+                        'value',
+                        roundToDecimals(evaluation.value, 6).toString()
+                    );
                 } else {
-                    // Store the calculated result and the formula expression
-                    handlePropertyFieldChange(valueInputPropertyId, 'value', roundToDecimals(evaluation.value, 6).toString());
-                    handlePropertyFieldChange(valueInputPropertyId, 'Formule_expression', value);
-                    handlePropertyFieldChange(valueInputPropertyId, 'Formule_id', formule.id);
-                    handlePropertyFieldChange(valueInputPropertyId, 'unit', ''); // Predefined formulas don't have units by default
+                    // Inform the user but do NOT clear the expression
+                    Alert.alert('Formule Fout', evaluation?.error || 'Formule kon niet worden berekend');
                 }
             } else if (formule && formule.isManual) {
                 // Manual input with separate value and unit
@@ -296,17 +369,23 @@ const AddPropertyScreen = ({ ...props }) => {
                     handlePropertyFieldChange(valueInputPropertyId, 'Formule_expression', '');
                 }
             } else {
-                // Legacy: Parse combined value+unit (e.g., "10m" -> value="10", unit="m")
-                const unitRegex = /(.*?)([a-zA-Z]+)$/;
+                // Legacy: Parse combined value+unit only when the left part is numeric and unit recognized; otherwise store as value text
+                const unitRegex = /(.*?)([a-zA-Z²³]+)$/;
                 const match = value.match(unitRegex);
-                
                 if (match) {
-                    const numericValue = match[1].trim();
-                    const unit = match[2];
-                    handlePropertyFieldChange(valueInputPropertyId, 'value', numericValue);
-                    handlePropertyFieldChange(valueInputPropertyId, 'unit', unit);
+                    const numericValue = (match[1] || '').trim();
+                    const unitRaw = (match[2] || '').trim();
+                    const num = parseFloat(numericValue.replace(',', '.'));
+                    const unitOk = allUnits.includes(sanitizeUnit(unitRaw));
+                    if (isFinite(num) && unitOk) {
+                        handlePropertyFieldChange(valueInputPropertyId, 'value', numericValue);
+                        handlePropertyFieldChange(valueInputPropertyId, 'unit', sanitizeUnit(unitRaw));
+                    } else {
+                        handlePropertyFieldChange(valueInputPropertyId, 'value', value);
+                        handlePropertyFieldChange(valueInputPropertyId, 'unit', '');
+                    }
                 } else {
-                    // No unit found, store as-is
+                    // No trailing letters (or not matching), store as plain value
                     handlePropertyFieldChange(valueInputPropertyId, 'value', value);
                     handlePropertyFieldChange(valueInputPropertyId, 'unit', '');
                 }
@@ -430,6 +509,31 @@ const AddPropertyScreen = ({ ...props }) => {
         );
     };
 
+    // Convert value when unit chip changes (for non-formula values). For formulas, only set display unit.
+    const handleUnitChange = (idToUpdate, newUnitRaw) => {
+        const newUnit = newUnitRaw || '';
+        setNewPropertiesList(prevList => prevList.map(p => {
+            if (p.id !== idToUpdate) return p;
+            const hasFormula = !!(p.Formule_expression && /[+\-*/()]/.test(p.Formule_expression) && !/^\d+\.?\d*[a-zA-Z]*$/.test(p.Formule_expression.trim()));
+            // For formulas, keep numeric value as-is (base) and just update unit for display
+            if (hasFormula) {
+                return { ...p, unit: newUnit };
+            }
+            const oldUnit = p.unit || '';
+            // If value isn't numeric or either unit missing, just set the unit without conversion
+            const num = parseFloat(String(p.value).replace(',', '.'));
+            if (!isFinite(num) || !oldUnit || !newUnit) {
+                return { ...p, unit: newUnit };
+            }
+            // If conversion path missing, just set unit
+            if (!unitConversionTable[newUnit] || !unitConversionTable[newUnit][oldUnit]) {
+                return { ...p, unit: newUnit };
+            }
+            const converted = convertToUnit(num, oldUnit, newUnit);
+            return { ...p, value: String(roundToDecimals(converted, 6)), unit: newUnit };
+        }));
+    };
+
 
 
     const handleSaveOnBack = async () => {
@@ -466,6 +570,9 @@ const AddPropertyScreen = ({ ...props }) => {
             id: `temp_prop_${tempNow}_${idx}`,
         }));
 
+        // Persist in global optimistic cache BEFORE any navigation to avoid initial 0-count flash
+        try { addOptimisticProperties(objectIdForProperties, tempProps); } catch (e) { console.warn('[AddPropertyScreen] failed to cache optimistic props', e); }
+
         // Add to the live item.properties for immediate visibility
         if (item) {
             item.properties = Array.isArray(item.properties) ? [...item.properties, ...tempProps] : [...tempProps];
@@ -484,6 +591,8 @@ const AddPropertyScreen = ({ ...props }) => {
                 eenheid: tp.eenheid || ''
             }))
         ]);
+
+    // (already cached above)
 
         // Clear new form fields and navigate back instantly
         setNewPropertiesList([]);
@@ -782,7 +891,14 @@ const AddPropertyScreen = ({ ...props }) => {
                                             {/* Right Side */}
                                             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                                                 <View style={{ alignItems: 'flex-end' }}>
-                                                {prop.Formule_expression && prop.Formule_expression.trim() !== '' && /[+\-*/()]/.test(prop.Formule_expression) && !/^\d+\.?\d*[a-zA-Z]*$/.test(prop.Formule_expression.trim()) && (
+                                                {(() => {
+                                                    const formulaExpr = (prop.Formule_expression && String(prop.Formule_expression))
+                                                        || (prop.formule && String(prop.formule))
+                                                        || (prop.formules && prop.formules.formule && String(prop.formules.formule))
+                                                        || '';
+                                                    const isFormula = formulaExpr.trim() !== '' && /[+\-*/()x×]/.test(formulaExpr) && !/^\d+\.?\d*[a-zA-Z]*$/.test(formulaExpr.trim());
+                                                    return isFormula;
+                                                })() && (
                                                     <>
                                                         <Text
                                                             style={{
@@ -791,7 +907,13 @@ const AddPropertyScreen = ({ ...props }) => {
                                                                 fontStyle: 'italic',
                                                             }}
                                                         >
-                                                            {prop.Formule_expression}
+                                                            {(() => {
+                                                                const formulaExpr = (prop.Formule_expression && String(prop.Formule_expression))
+                                                                    || (prop.formule && String(prop.formule))
+                                                                    || (prop.formules && prop.formules.formule && String(prop.formules.formule))
+                                                                    || '';
+                                                                return formulaExpr;
+                                                            })()}
                                                         </Text>
                                                         {(() => {
                                                             // Create combined properties list for formula evaluation
@@ -807,7 +929,12 @@ const AddPropertyScreen = ({ ...props }) => {
                                                                     unit: p.unit || ''
                                                                 }))
                                                             ];
-                                                            const evaluation = evaluateFormule(prop.Formule_expression, allProperties);
+                                                            const formulaExpr = (prop.Formule_expression && String(prop.Formule_expression))
+                                                                || (prop.formule && String(prop.formule))
+                                                                || (prop.formules && prop.formules.formule && String(prop.formules.formule))
+                                                                || '';
+                                                            const normalizedExpr = formulaExpr.replace(/[x×]/g, '*');
+                                                            const evaluation = evaluateFormule(normalizedExpr, allProperties);
                                                             if (evaluation.error) {
                                                                 return (
                                                                     <Text style={{
@@ -819,23 +946,55 @@ const AddPropertyScreen = ({ ...props }) => {
                                                                     </Text>
                                                                 );
                                                             } else {
+                                                                // Align display logic with new property preview: convert only when appropriate
+                                                                const hasMulDiv = /[*/]/.test(normalizedExpr);
+                                                                let v = evaluation.value;
+                                                                const u = prop.eenheid || '';
+                                                                const isLength = ['m','cm','mm'].includes(u);
+                                                                const isMass = ['kg','g'].includes(u);
+                                                                const isVolume = ['m³','L','mL'].includes(u);
+                                                                const isArea = ['m²','cm²','mm²'].includes(u);
+                                                                let displayUnit = '';
+
+                                                                if (!hasMulDiv) {
+                                                                    // Linear/additive: allow linear conversions and show unit
+                                                                    if (u && ['cm','mm','g','mL'].includes(u)) {
+                                                                        const base = (u === 'cm' || u === 'mm') ? 'm' : (u === 'g' ? 'kg' : 'L');
+                                                                        v = convertToUnit(v, base, u);
+                                                                    }
+                                                                    displayUnit = u;
+                                                                } else {
+                                                                    // Multiplicative/divisive: allow area/volume if explicitly chosen
+                                                                    if (isArea) {
+                                                                        v = convertToUnit(v, 'm²', u);
+                                                                        displayUnit = u;
+                                                                    } else if (isVolume && u !== 'L') {
+                                                                        v = convertToUnit(v, 'm³', u);
+                                                                        displayUnit = u;
+                                                                    } else {
+                                                                        displayUnit = '';
+                                                                    }
+                                                                }
+
+                                                                const displayVal = roundToDecimals(v, 6);
                                                                 return (
                                                                     <Text style={[AppStyles.propertyValue, { marginTop: 2 }]}>
-                                                                        {(() => {
-                                                                            if (prop.eenheid && ['cm', 'mm', 'g', 'mL'].includes(prop.eenheid)) {
-                                                                                const convertedValue = convertToUnit(evaluation.value, 'm', prop.eenheid);
-                                                                                return roundToDecimals(convertedValue, 6);
-                                                                            }
-                                                                            return roundToDecimals(evaluation.value, 6);
-                                                                        })()}
-                                                                        {prop.eenheid ? ` ${prop.eenheid}` : ''}
+                                                                        {displayVal}
+                                                                        {displayUnit ? ` ${displayUnit}` : ''}
                                                                     </Text>
                                                                 );
                                                             }
                                                         })()}
                                                     </>
                                                 )}
-                                                {(!prop.Formule_expression || prop.Formule_expression.trim() === '' || !/[+\-*/()]/.test(prop.Formule_expression) || /^\d+\.?\d*[a-zA-Z]*$/.test(prop.Formule_expression.trim())) && (
+                                                {(() => {
+                                                    const formulaExpr = (prop.Formule_expression && String(prop.Formule_expression))
+                                                        || (prop.formule && String(prop.formule))
+                                                        || (prop.formules && prop.formules.formule && String(prop.formules.formule))
+                                                        || '';
+                                                    const isFormula = formulaExpr.trim() !== '' && /[+\-*/()x×]/.test(formulaExpr) && !/^\d+\.?\d*[a-zA-Z]*$/.test(formulaExpr.trim());
+                                                    return !isFormula;
+                                                })() && (
                                                     <Text style={[AppStyles.propertyValue, { marginTop: 4 }]}>
                                                         {prop.waarde}
                                                         {prop.eenheid ? ` ${prop.eenheid}` : ''}
@@ -1014,7 +1173,7 @@ const AddPropertyScreen = ({ ...props }) => {
                                 <View>
                                 {Platform.OS === 'web' ? (
                                     <View style={{ flexDirection: 'row', gap: 12 }}>
-                                        <View style={[AppStyles.formGroup, { flex: 1 }]}>
+                                <View style={[AppStyles.formGroup, { flex: 1 }]}> 
                                             <Text style={AppStyles.formLabel}>Eigenschap Naam</Text>
                                             <TextInput
                                                 placeholder="Bijv. Gewicht"
@@ -1022,30 +1181,128 @@ const AddPropertyScreen = ({ ...props }) => {
                                                 onChangeText={(text) => handlePropertyFieldChange(prop.id, 'name', text)}
                                                 style={AppStyles.formInput}
                                             />
+                                            {/* Eenheid selectie */}
+                                            <View style={{ marginTop: 10 }}>
+                                                <Text style={[AppStyles.formLabel, { marginBottom: 8 }]}>Eenheid</Text>
+                                                <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+                                                    {[ 'Geen', ...allUnits ].map((unit) => {
+                                                        const isSelected = (unit === 'Geen' && !prop.unit) || prop.unit === unit;
+                                                        return (
+                                                            <TouchableOpacity
+                                                                key={unit}
+                                                                onPress={() => handleUnitChange(prop.id, unit === 'Geen' ? '' : unit)}
+                                                                style={{
+                                                                    paddingVertical: 8,
+                                                                    paddingHorizontal: 12,
+                                                                    borderRadius: 20,
+                                                                    borderWidth: 1,
+                                                                    borderColor: isSelected ? colors.blue600 : colors.lightGray300,
+                                                                    backgroundColor: isSelected ? colors.blue50 : colors.white,
+                                                                    marginRight: 8,
+                                                                    marginBottom: 8,
+                                                                }}
+                                                            >
+                                                                <Text style={{
+                                                                    color: isSelected ? colors.blue700 : colors.lightGray700,
+                                                                    fontWeight: isSelected ? '700' : '500'
+                                                                }}>
+                                                                    {unit}
+                                                                </Text>
+                                                            </TouchableOpacity>
+                                                        );
+                                                    })}
+                                                </View>
+                                            </View>
                                         </View>
                                         <View style={[AppStyles.formGroup, { flex: 1 }]}>
                                             <Text style={AppStyles.formLabel}>Waarde</Text>
-                                            <TouchableOpacity
-                                                onPress={() => handleOpenValueInput(prop.id)}
-                                                style={[AppStyles.formInput, { justifyContent: 'center' }]}
-                                            >
-                                                {prop.Formule_expression && prop.Formule_expression.trim() !== '' && /[+\-*/()]/.test(prop.Formule_expression) && !/^\d+\.?\d*[a-zA-Z]*$/.test(prop.Formule_expression.trim()) ? (
-                                                    <View>
-                                                        <Text style={{color: colors.lightGray500, fontSize: 13, fontStyle: 'italic'}}>
-                                                            {prop.Formule_expression}
-                                                        </Text>
-                                                        <Text style={{color: colors.lightGray800, fontSize: 14, marginTop: 2}}>
-                                                            = {roundToDecimals(parseFloat(prop.value) || 0, 6)}{prop.unit || ''}
-                                                        </Text>
-                                                    </View>
-                                                ) : (
-                                                    <Text style={{ 
-                                                        color: (prop.value || prop.unit) ? colors.lightGray800 : colors.lightGray400 
-                                                    }}>
-                                                        {prop.value ? (prop.value + (prop.unit || '')) : 'Tap om waarde in te voeren...'}
-                                                    </Text>
-                                                )}
-                                            </TouchableOpacity>
+                                            {(() => {
+                                                const isFormula = !!(prop.Formule_expression && /[+\-*/()]/.test(prop.Formule_expression) && !/^\d+\.?\d*[a-zA-Z]*$/.test(prop.Formule_expression.trim()));
+                                                let evalResult = null;
+                                                let evalError = null;
+                                                let displayUnit = '';
+                                                if (isFormula) {
+                                                    const allProperties = [
+                                                        ...(item.properties || []).map(p => ({ name: p.name, value: p.waarde, unit: p.eenheid || '' })),
+                                                        ...newPropertiesList.map(p => ({ name: p.name, value: p.value, unit: p.unit || '' }))
+                                                    ];
+                                                    const evaluation = evaluateFormule(prop.Formule_expression, allProperties);
+                                                    if (evaluation.error) {
+                                                        evalError = evaluation.error;
+                                                    } else {
+                                                        const hasMulDiv = /[*/]/.test(prop.Formule_expression);
+                                                        let v = evaluation.value;
+                                                        const isLinearUnit = ['m','cm','mm','kg','g','L','mL'].includes(prop.unit);
+                                                        const isAreaUnit = ['m²','cm²','mm²'].includes(prop.unit);
+                                                        const isVolumeUnit = ['m³','L','mL'].includes(prop.unit);
+
+                                                        if (!hasMulDiv) {
+                                                            // Linear/additive: allow linear conversions and show linear unit
+                                                            if (prop.unit && ['cm','mm','g','mL'].includes(prop.unit)) {
+                                                                const base = (prop.unit === 'cm' || prop.unit === 'mm') ? 'm' : (prop.unit === 'g' ? 'kg' : 'L');
+                                                                v = convertToUnit(v, base, prop.unit);
+                                                            }
+                                                            displayUnit = prop.unit || '';
+                                                        } else {
+                                                            // Multiplicative/divisive: don't show linear units; only allow area/volume units if explicitly selected
+                                                            if (isAreaUnit) {
+                                                                v = convertToUnit(v, 'm²', prop.unit);
+                                                                displayUnit = prop.unit;
+                                                            } else if (isVolumeUnit && prop.unit !== 'L') {
+                                                                // If user selects m³ or mL, convert from m³; if L is selected here with mul/div, we suppress unit to avoid confusion
+                                                                v = convertToUnit(v, 'm³', prop.unit);
+                                                                displayUnit = prop.unit;
+                                                            } else {
+                                                                displayUnit = '';
+                                                            }
+                                                        }
+                                                        evalResult = roundToDecimals(v, 6);
+                                                    }
+                                                }
+                                                return (
+                                                    <WaardeInput
+                                                        value={prop.Formule_expression ? prop.Formule_expression : (prop.value || '') + (prop.unit || '')}
+                                                        isFormula={isFormula}
+                                                        computedValue={isFormula ? evalResult : null}
+                                                        unit={isFormula ? (displayUnit || '') : ''}
+                                                        error={isFormula ? evalError : null}
+                                                        onChange={(text) => {
+                                                            const hasFormulaPattern = /[+\-*/()]/.test(text) && !/^\d+\.?\d*$/.test(text.trim());
+                                                            if (hasFormulaPattern) {
+                                                                handlePropertyFieldChange(prop.id, 'Formule_expression', text);
+                                                                const evaluation = evaluateFormule(text, newPropertiesList);
+                                                                if (!evaluation.error) {
+                                                                    handlePropertyFieldChange(prop.id, 'value', roundToDecimals(evaluation.value, 6).toString());
+                                                                    handlePropertyFieldChange(prop.id, 'unit', '');
+                                                                }
+                                                            } else {
+                                                                // Only treat trailing letters as a unit if the left part is numeric AND the unit is recognized
+                                                                const unitRegex = /(.*?)([a-zA-Z²³]+)$/;
+                                                                const match = text.match(unitRegex);
+                                                                if (match) {
+                                                                    const rawVal = (match[1] || '').trim();
+                                                                    const rawUnit = (match[2] || '').trim();
+                                                                    const num = parseFloat(rawVal.replace(',', '.'));
+                                                                    const unitOk = allUnits.includes(sanitizeUnit(rawUnit));
+                                                                    if (isFinite(num) && unitOk) {
+                                                                        handlePropertyFieldChange(prop.id, 'value', match[1]);
+                                                                        handlePropertyFieldChange(prop.id, 'unit', sanitizeUnit(rawUnit));
+                                                                    } else {
+                                                                        // Treat full text as value (textual value), clear unit
+                                                                        handlePropertyFieldChange(prop.id, 'value', text);
+                                                                        handlePropertyFieldChange(prop.id, 'unit', '');
+                                                                    }
+                                                                } else {
+                                                                    handlePropertyFieldChange(prop.id, 'value', text);
+                                                                    handlePropertyFieldChange(prop.id, 'unit', '');
+                                                                }
+                                                                handlePropertyFieldChange(prop.id, 'Formule_expression', '');
+                                                            }
+                                                        }}
+                                                        onAddFormule={() => handleOpenValueInput(prop.id)}
+                                                    />
+                                                );
+                                            })()}
                                         </View>
                                     </View>
                                 ) : (
@@ -1058,30 +1315,127 @@ const AddPropertyScreen = ({ ...props }) => {
                                                 onChangeText={(text) => handlePropertyFieldChange(prop.id, 'name', text)}
                                                 style={AppStyles.formInput}
                                             />
+                                            {/* Eenheid selectie */}
+                                            <View style={{ marginTop: 10 }}>
+                                                <Text style={[AppStyles.formLabel, { marginBottom: 8 }]}>Eenheid</Text>
+                                                <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+                                                    {[ 'Geen', ...allUnits ].map((unit) => {
+                                                        const isSelected = (unit === 'Geen' && !prop.unit) || prop.unit === unit;
+                                                        return (
+                                                            <TouchableOpacity
+                                                                key={unit}
+                                                                onPress={() => handleUnitChange(prop.id, unit === 'Geen' ? '' : unit)}
+                                                                style={{
+                                                                    paddingVertical: 8,
+                                                                    paddingHorizontal: 12,
+                                                                    borderRadius: 20,
+                                                                    borderWidth: 1,
+                                                                    borderColor: isSelected ? colors.blue600 : colors.lightGray300,
+                                                                    backgroundColor: isSelected ? colors.blue50 : colors.white,
+                                                                    marginRight: 8,
+                                                                    marginBottom: 8,
+                                                                }}
+                                                            >
+                                                                <Text style={{
+                                                                    color: isSelected ? colors.blue700 : colors.lightGray700,
+                                                                    fontWeight: isSelected ? '700' : '500'
+                                                                }}>
+                                                                    {unit}
+                                                                </Text>
+                                                            </TouchableOpacity>
+                                                        );
+                                                    })}
+                                                </View>
+                                            </View>
                                         </View>
                                         <View style={AppStyles.formGroup}>
                                             <Text style={AppStyles.formLabel}>Waarde</Text>
-                                            <TouchableOpacity
-                                                onPress={() => handleOpenValueInput(prop.id)}
-                                                style={[AppStyles.formInput, { justifyContent: 'center' }]}
-                                            >
-                                                {prop.Formule_expression && prop.Formule_expression.trim() !== '' && /[+\-*/()]/.test(prop.Formule_expression) && !/^\d+\.?\d*[a-zA-Z]*$/.test(prop.Formule_expression.trim()) ? (
-                                                    <View>
-                                                        <Text style={{color: colors.lightGray500, fontSize: 13, fontStyle: 'italic'}}>
-                                                            {prop.Formule_expression}
-                                                        </Text>
-                                                        <Text style={{color: colors.lightGray800, fontSize: 14, marginTop: 2}}>
-                                                            {roundToDecimals(parseFloat(prop.value) || 0, 6)}{prop.unit || ''}
-                                                        </Text>
-                                                    </View>
-                                                ) : (
-                                                    <Text style={{ 
-                                                        color: (prop.value || prop.unit) ? colors.lightGray800 : colors.lightGray400 
-                                                    }}>
-                                                        {prop.value ? (prop.value + (prop.unit || '')) : 'Tap om waarde in te voeren...'}
-                                                    </Text>
-                                                )}
-                                            </TouchableOpacity>
+                                            {(() => {
+                                                const isFormula = !!(prop.Formule_expression && /[+\-*/()]/.test(prop.Formule_expression) && !/^\d+\.?\d*[a-zA-Z]*$/.test(prop.Formule_expression.trim()));
+                                                let evalResult = null;
+                                                let evalError = null;
+                                                let displayUnit = '';
+                                                if (isFormula) {
+                                                    const allProperties = [
+                                                        ...(item.properties || []).map(p => ({ name: p.name, value: p.waarde, unit: p.eenheid || '' })),
+                                                        ...newPropertiesList.map(p => ({ name: p.name, value: p.value, unit: p.unit || '' }))
+                                                    ];
+                                                    const evaluation = evaluateFormule(prop.Formule_expression, allProperties);
+                                                    if (evaluation.error) {
+                                                        evalError = evaluation.error;
+                                                    } else {
+                                                        const hasMulDiv = /[*/]/.test(prop.Formule_expression);
+                                                        let v = evaluation.value;
+                                                        const isLinearUnit = ['m','cm','mm','kg','g','L','mL'].includes(prop.unit);
+                                                        const isAreaUnit = ['m²','cm²','mm²'].includes(prop.unit);
+                                                        const isVolumeUnit = ['m³','L','mL'].includes(prop.unit);
+
+                                                        if (!hasMulDiv) {
+                                                            // Linear/additive: allow linear conversions and show linear unit
+                                                            if (prop.unit && ['cm','mm','g','mL'].includes(prop.unit)) {
+                                                                const base = (prop.unit === 'cm' || prop.unit === 'mm') ? 'm' : (prop.unit === 'g' ? 'kg' : 'L');
+                                                                v = convertToUnit(v, base, prop.unit);
+                                                            }
+                                                            displayUnit = prop.unit || '';
+                                                        } else {
+                                                            // Multiplicative/divisive: don't show linear units; only allow area/volume units if explicitly selected
+                                                            if (isAreaUnit) {
+                                                                v = convertToUnit(v, 'm²', prop.unit);
+                                                                displayUnit = prop.unit;
+                                                            } else if (isVolumeUnit && prop.unit !== 'L') {
+                                                                v = convertToUnit(v, 'm³', prop.unit);
+                                                                displayUnit = prop.unit;
+                                                            } else {
+                                                                displayUnit = '';
+                                                            }
+                                                        }
+                                                        evalResult = roundToDecimals(v, 6);
+                                                    }
+                                                }
+                                                return (
+                                                    <WaardeInput
+                                                        value={prop.Formule_expression ? prop.Formule_expression : (prop.value || '') + (prop.unit || '')}
+                                                        isFormula={isFormula}
+                                                        computedValue={isFormula ? evalResult : null}
+                                                        unit={isFormula ? (displayUnit || '') : ''}
+                                                        error={isFormula ? evalError : null}
+                                                        onChange={(text) => {
+                                                            const hasFormulaPattern = /[+\-*/()]/.test(text) && !/^\d+\.?\d*$/.test(text.trim());
+                                                            if (hasFormulaPattern) {
+                                                                handlePropertyFieldChange(prop.id, 'Formule_expression', text);
+                                                                const evaluation = evaluateFormule(text, newPropertiesList);
+                                                                if (!evaluation.error) {
+                                                                    handlePropertyFieldChange(prop.id, 'value', roundToDecimals(evaluation.value, 6).toString());
+                                                                    handlePropertyFieldChange(prop.id, 'unit', '');
+                                                                }
+                                                            } else {
+                                                                // Only treat trailing letters as a unit if the left part is numeric AND the unit is recognized
+                                                                const unitRegex = /(.*?)([a-zA-Z²³]+)$/;
+                                                                const match = text.match(unitRegex);
+                                                                if (match) {
+                                                                    const rawVal = (match[1] || '').trim();
+                                                                    const rawUnit = (match[2] || '').trim();
+                                                                    const num = parseFloat(rawVal.replace(',', '.'));
+                                                                    const unitOk = allUnits.includes(sanitizeUnit(rawUnit));
+                                                                    if (isFinite(num) && unitOk) {
+                                                                        handlePropertyFieldChange(prop.id, 'value', match[1]);
+                                                                        handlePropertyFieldChange(prop.id, 'unit', sanitizeUnit(rawUnit));
+                                                                    } else {
+                                                                        // Treat full text as value (textual value), clear unit
+                                                                        handlePropertyFieldChange(prop.id, 'value', text);
+                                                                        handlePropertyFieldChange(prop.id, 'unit', '');
+                                                                    }
+                                                                } else {
+                                                                    handlePropertyFieldChange(prop.id, 'value', text);
+                                                                    handlePropertyFieldChange(prop.id, 'unit', '');
+                                                                }
+                                                                handlePropertyFieldChange(prop.id, 'Formule_expression', '');
+                                                            }
+                                                        }}
+                                                        onAddFormule={() => handleOpenValueInput(prop.id)}
+                                                    />
+                                                );
+                                            })()}
                                         </View>
                                     </>
                                 )}

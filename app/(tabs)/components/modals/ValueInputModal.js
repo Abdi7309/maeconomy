@@ -1,50 +1,25 @@
-import { Calculator, Edit3, X } from 'lucide-react-native';
+import { Calculator, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { FlatList, KeyboardAvoidingView, Modal, Platform, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { FlatList, KeyboardAvoidingView, Modal, Platform, Text, TouchableOpacity, View } from 'react-native';
 import { colors } from '../../AppStyles';
 
 const ValueInputModal = ({ 
     visible, 
     onClose, 
-    currentValue = '', 
-    currentUnit = '',
     onValueSet, 
     formules = [],
-    onAddFormule,
-    propertyName = 'Waarde'
 }) => {
-    const [inputMode, setInputMode] = useState('choice'); // 'choice', 'manual', 'formule'
-    const [manualValue, setManualValue] = useState('');
     const [selectedFormule, setSelectedFormule] = useState(null);
-    const [selectedUnit, setSelectedUnit] = useState('');
 
     // Reset modal state when it becomes visible
     useEffect(() => {
         if (visible) {
-            setInputMode('choice');
             setSelectedFormule(null);
-            
-            // Use currentValue directly (no parsing needed since unit is separate)
-            if (currentValue) {
-                setManualValue(currentValue);
-            } else {
-                setManualValue('');
-            }
-            
-            // Use currentUnit if provided, otherwise default to '' (geen)
-            if (currentUnit) {
-                setSelectedUnit(currentUnit);
-            } else {
-                setSelectedUnit('');
-            }
         }
-    }, [visible, currentValue, currentUnit]);
+    }, [visible]);
 
     const handleSave = () => {
-        if (inputMode === 'manual') {
-            // Pass value and unit separately as an object
-            onValueSet(manualValue, { unit: selectedUnit, isManual: true });
-        } else if (inputMode === 'formule' && selectedFormule) {
+        if (selectedFormule) {
             // Access the correct property name (lowercase 'formule' from database)
             const formuleExpression = selectedFormule.formule || selectedFormule.Formule || '';
             onValueSet(formuleExpression, selectedFormule);
@@ -56,128 +31,9 @@ const ValueInputModal = ({
         onClose();
     };
 
-    const renderChoiceScreen = () => (
-        <View style={styles.modalContainer}>
-            <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Waarde Invoeren</Text>
-                <TouchableOpacity onPress={handleCancel} style={styles.closeButton}>
-                    <X color={colors.lightGray700} size={20} />
-                </TouchableOpacity>
-            </View>
-
-            <View style={styles.modalContent}>
-                <Text style={styles.modalSubtitle}>
-                    Hoe wil je de waarde invoeren?
-                </Text>
-
-                <TouchableOpacity 
-                    style={styles.compactOptionButton} 
-                    onPress={() => setInputMode('manual')}
-                >
-                    <View style={styles.compactOptionIcon}>
-                        <Edit3 color={colors.blue600} size={20} />
-                    </View>
-                    <View style={styles.compactOptionContent}>
-                        <Text style={styles.compactOptionTitle}>Handmatig Invoeren</Text>
-                        <Text style={styles.compactOptionDescription}>
-                            Typ zelf een waarde in
-                        </Text>
-                    </View>
-                </TouchableOpacity>
-
-                <TouchableOpacity 
-                    style={styles.compactOptionButton} 
-                    onPress={() => setInputMode('formule')}
-                >
-                    <View style={styles.compactOptionIcon}>
-                        <Calculator color={colors.green600} size={20} />
-                    </View>
-                    <View style={styles.compactOptionContent}>
-                        <Text style={styles.compactOptionTitle}>Formule Kiezen</Text>
-                        <Text style={styles.compactOptionDescription}>
-                            Kies een bestaande formule
-                        </Text>
-                    </View>
-                </TouchableOpacity>
-            </View>
-        </View>
-    );
-
-    const renderManualScreen = () => (
-        <View style={styles.modalContainer}>
-            <View style={styles.modalHeader}>
-                <TouchableOpacity onPress={() => setInputMode('choice')} style={styles.backButton}>
-                    <Text style={styles.backButtonText}>← Terug</Text>
-                </TouchableOpacity>
-                <Text style={styles.modalTitle}>Handmatige Waarde</Text>
-                <TouchableOpacity onPress={handleCancel} style={styles.closeButton}>
-                    <X color={colors.lightGray700} size={20} />
-                </TouchableOpacity>
-            </View>
-
-            <View style={styles.modalContent}>
-                <View style={styles.formGroup}>
-                    <Text style={styles.formLabel}>Waarde</Text>
-                    <TextInput
-                        placeholder="Bijv. 25 of 10*2+5"
-                        value={manualValue}
-                        onChangeText={setManualValue}
-                        style={styles.textInput}
-                        autoFocus={true}
-                        keyboardType="default"
-                    />
-                    <Text style={styles.helpText}>
-                        Getal of berekening (bijv. 10*2+5)
-                    </Text>
-                </View>
-
-                <View style={styles.formGroup}>
-                    <Text style={styles.formLabel}>Eenheid</Text>
-                    <View style={styles.unitPickerContainer}>
-                        {['Geen', 'm', 'cm', 'mm', 'kg', 'g', 'L', 'mL'].map((unit) => (
-                            <TouchableOpacity
-                                key={unit}
-                                style={[
-                                    styles.unitButton,
-                                    (selectedUnit === unit || (unit === 'Geen' && !selectedUnit)) && styles.unitButtonSelected
-                                ]}
-                                onPress={() => setSelectedUnit(unit === 'Geen' ? '' : unit)}
-                            >
-                                <Text style={[
-                                    styles.unitButtonText,
-                                    (selectedUnit === unit || (unit === 'Geen' && !selectedUnit)) && styles.unitButtonTextSelected
-                                ]}>
-                                    {unit}
-                                </Text>
-                            </TouchableOpacity>
-                        ))}
-                    </View>
-                </View>
-
-                <View style={styles.expandedButtonContainer}>
-                    <TouchableOpacity 
-                        style={[styles.expandedButton, styles.secondaryButton]} 
-                        onPress={() => setInputMode('choice')}
-                    >
-                        <Text style={styles.secondaryButtonText}>Annuleren</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity 
-                        style={[styles.expandedButton, styles.primaryButton]} 
-                        onPress={handleSave}
-                    >
-                        <Text style={styles.primaryButtonText}>Opslaan</Text>
-                    </TouchableOpacity>
-                </View>
-            </View>
-        </View>
-    );
-
     const renderFormuleScreen = () => (
         <View style={styles.modalContainer}>
             <View style={styles.modalHeader}>
-                <TouchableOpacity onPress={() => setInputMode('choice')} style={styles.backButton}>
-                    <Text style={styles.backButtonText}>← Terug</Text>
-                </TouchableOpacity>
                 <Text style={styles.modalTitle}>Formule Kiezen</Text>
                 <TouchableOpacity onPress={handleCancel} style={styles.closeButton}>
                     <X color={colors.lightGray700} size={20} />
@@ -185,47 +41,49 @@ const ValueInputModal = ({
             </View>
 
             <View style={styles.modalContent}>
-                {formules.length > 0 ? (
-                    <>
-                        <Text style={styles.modalSubtitle}>Kies een formule:</Text>
-                        <FlatList
-                            data={formules}
-                            keyExtractor={(item) => item.id.toString()}
-                            style={styles.compactFormuleList}
-                            renderItem={({ item }) => (
-                                <TouchableOpacity
-                                    style={[
-                                        styles.compactFormuleItem,
-                                        selectedFormule?.id === item.id && styles.compactFormuleItemSelected
-                                    ]}
-                                    onPress={() => setSelectedFormule(item)}
-                                >
-                                    <View style={styles.compactFormuleItemContent}>
-                                        <Text style={styles.compactFormuleName}>{item.name}</Text>
-                                        <Text style={styles.compactFormuleExpression}>{item.Formule}</Text>
-                                    </View>
-                                    {selectedFormule?.id === item.id && (
-                                        <View style={styles.compactSelectedIndicator} />
-                                    )}
-                                </TouchableOpacity>
-                            )}
-                        />
-                    </>
-                ) : (
-                    <View style={styles.compactEmptyState}>
-                        <Calculator color={colors.lightGray400} size={32} />
-                        <Text style={styles.compactEmptyStateText}>Geen formules</Text>
-                        <Text style={styles.compactEmptyStateSubtext}>
-                            Voeg eerst een formule toe
-                        </Text>
-                    </View>
-                )}
+                <View style={styles.contentBody}>
+                    {formules.length > 0 ? (
+                        <>
+                            <Text style={styles.modalSubtitle}>Kies een formule:</Text>
+                            <FlatList
+                                data={formules}
+                                keyExtractor={(item, index) => (item?.id != null ? String(item.id) : `${item?.name || 'item'}-${index}`)}
+                                style={styles.compactFormuleList}
+                                renderItem={({ item }) => (
+                                    <TouchableOpacity
+                                        style={[
+                                            styles.compactFormuleItem,
+                                            selectedFormule?.id === item.id && styles.compactFormuleItemSelected
+                                        ]}
+                                        onPress={() => setSelectedFormule(item)}
+                                    >
+                                        <View style={styles.compactFormuleItemContent}>
+                                            <Text style={styles.compactFormuleName}>{item.name}</Text>
+                                            <Text style={styles.compactFormuleExpression}>{item.formule || item.Formule || ''}</Text>
+                                        </View>
+                                        {selectedFormule?.id === item.id && (
+                                            <View style={styles.compactSelectedIndicator} />
+                                        )}
+                                    </TouchableOpacity>
+                                )}
+                            />
+                        </>
+                    ) : (
+                        <View style={styles.compactEmptyState}>
+                            <Calculator color={colors.lightGray400} size={32} />
+                            <Text style={styles.compactEmptyStateText}>Geen formules</Text>
+                            <Text style={styles.compactEmptyStateSubtext}>
+                                Voeg eerst een formule toe
+                            </Text>
+                        </View>
+                    )}
+                </View>
 
                 <View style={styles.modalButtonContainer}>
                     <View style={styles.modalActionButtons}>
                         <TouchableOpacity 
                             style={[styles.modalButton, styles.secondaryButton, styles.halfButton]} 
-                            onPress={() => setInputMode('choice')}
+                            onPress={handleCancel}
                         >
                             <Text style={styles.secondaryButtonText}>Annuleren</Text>
                         </TouchableOpacity>
@@ -249,28 +107,10 @@ const ValueInputModal = ({
                     </View>
                 </View>
 
-                {formules.length === 0 && (
-                    <View style={styles.compactEmptyState}>
-                        <Text style={styles.compactEmptyStateText}>Geen formules beschikbaar</Text>
-                        <Text style={styles.compactEmptyStateSubtext}>
-                            Ga naar het hoofdscherm om formules toe te voegen
-                        </Text>
-                    </View>
-                )}
+                {/* Removed extra empty-state texts per request */}
             </View>
         </View>
     );
-
-    const renderCurrentScreen = () => {
-        switch (inputMode) {
-            case 'manual':
-                return renderManualScreen();
-            case 'formule':
-                return renderFormuleScreen();
-            default:
-                return renderChoiceScreen();
-        }
-    };
 
     return (
         <Modal
@@ -280,8 +120,9 @@ const ValueInputModal = ({
             onRequestClose={handleCancel}
         >
             <KeyboardAvoidingView
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
                 style={styles.overlay}
+                keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
             >
                 <View style={styles.overlayBackground}>
                     <TouchableOpacity 
@@ -290,7 +131,7 @@ const ValueInputModal = ({
                         onPress={handleCancel}
                     />
                     <View style={styles.modalWrapper}>
-                        {renderCurrentScreen()}
+                        {renderFormuleScreen()}
                     </View>
                     <TouchableOpacity 
                         style={styles.overlayTouchArea}
@@ -371,6 +212,12 @@ const styles = {
     },
     modalContent: {
         padding: 32,
+        flex: 1,
+        justifyContent: 'space-between',
+    },
+    contentBody: {
+        flex: 1,
+        minHeight: 0,
     },
     modalSubtitle: {
         fontSize: 16,
@@ -557,8 +404,9 @@ const styles = {
     },
     // Compact formule list
     compactFormuleList: {
-        maxHeight: 350,
+        flexGrow: 1,
         marginBottom: 24,
+        minHeight: 0,
     },
     compactFormuleItem: {
         padding: 16,

@@ -1,17 +1,34 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Modal, Platform, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import AppStyles, { colors } from '../../AppStyles';
-import { deleteProperty, updateProperty } from '../../api';
+import { deleteProperty, fetchFormules, updateProperty } from '../../api';
 
+// Extended unit table (length, mass, volume, area, cubic)
 const unitConversionTable = {
+    // Length
     m:    { m: 1, cm: 0.01, mm: 0.001 },
     cm:   { m: 100, cm: 1, mm: 0.1 },
     mm:   { m: 1000, cm: 10, mm: 1 },
+    // Mass
     kg:   { kg: 1, g: 0.001 },
     g:    { kg: 1000, g: 1 },
-    L:    { L: 1, mL: 0.001 },
-    mL:   { L: 1000, mL: 1 }
+    // Volume (liquid metric)
+    L:    { L: 1, mL: 0.001, 'm³': 0.001 }, // include m³ mapping (1 L = 0.001 m³)
+    mL:   { L: 1000, mL: 1, 'm³': 0.000001 },
+    'm³': { 'm³': 1, L: 0.001, mL: 0.000001 },
+    // Area
+    'm²': { 'm²': 1, 'cm²': 0.0001, 'mm²': 0.000001 },
+    'cm²': { 'm²': 10000, 'cm²': 1, 'mm²': 0.01 },
+    'mm²': { 'm²': 1000000, 'cm²': 100, 'mm²': 1 }
 };
+
+const sanitizeUnit = (u) => u
+    ?.replace(/m\^2/i, 'm²')
+    ?.replace(/m\^3/i, 'm³')
+    ?.replace(/^l$/i, 'L')
+    ?.replace(/^ml$/i, 'mL')
+    ?.replace('²', '²')
+    ?.replace('³', '³');
 
 // Global precision control for numeric outputs
 const DECIMAL_PLACES = 6;
@@ -22,10 +39,11 @@ const roundToDecimals = (value, decimals = DECIMAL_PLACES) => {
 };
 
 const convertToUnit = (value, fromUnit, toUnit) => {
-    if (!fromUnit || !toUnit || !unitConversionTable[toUnit] || !unitConversionTable[toUnit][fromUnit]) return value;
-    const factor = unitConversionTable[toUnit][fromUnit];
-    const converted = roundToDecimals(value * factor);
-    return converted;
+    const f = sanitizeUnit(fromUnit);
+    const t = sanitizeUnit(toUnit);
+    if (!f || !t || !unitConversionTable[t] || !unitConversionTable[t][f]) return value;
+    const factor = unitConversionTable[t][f];
+    return roundToDecimals(value * factor);
 };
 
 const buildPropertiesMap = (properties, outputUnit) => {
@@ -79,10 +97,34 @@ const evaluateFormule = (Formule, propertiesMap) => {
         expression = expression.replace(regex, propertiesMap[key]);
     });
 
-    // Normalize all numbers with units (e.g., "10cm", "1.5m") to the base unit (meters)
+    // Normalize length units to meters
     expression = expression.replace(/(\d+(?:\.\d+)?)\s*(mm|cm|m)\b/gi, (match, num, unit) => {
         const valueInMeters = convertToUnit(parseFloat(num), unit.toLowerCase(), 'm');
         return valueInMeters.toString();
+    });
+
+    // Normalize mass units to kg
+    expression = expression.replace(/(\d+(?:\.\d+)?)\s*(g|kg)\b/gi, (match, num, unit) => {
+        const valueInKg = convertToUnit(parseFloat(num), unit.toLowerCase(), 'kg');
+        return valueInKg.toString();
+    });
+
+    // Normalize volume units to liters (L)
+    expression = expression.replace(/(\d+(?:\.\d+)?)\s*(mL|L)\b/gi, (match, num, unit) => {
+        const valueInL = convertToUnit(parseFloat(num), unit, 'L');
+        return valueInL.toString();
+    });
+
+    // Normalize area units to m²
+    expression = expression.replace(/(\d+(?:\.\d+)?)\s*(m²|cm²|mm²)\b/gi, (match, num, unit) => {
+        const valueInM2 = convertToUnit(parseFloat(num), unit, 'm²');
+        return valueInM2.toString();
+    });
+
+    // Normalize cubic units to m³
+    expression = expression.replace(/(\d+(?:\.\d+)?)\s*(m³)\b/gi, (match, num, unit) => {
+        const valueInM3 = convertToUnit(parseFloat(num), unit, 'm³');
+        return valueInM3.toString();
     });
 
     try {
@@ -118,17 +160,20 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
     const [editedFormule, setEditedFormule] = useState(initialFormule);
     const [editedUnit, setEditedUnit] = useState(property?.eenheid || '');
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    // Formula selection state
+    const [editedFormuleId, setEditedFormuleId] = useState(property?.Formule_id ?? null);
+    const [showFormulePicker, setShowFormulePicker] = useState(false);
+    const [availableFormules, setAvailableFormules] = useState([]);
+    const [loadingFormules, setLoadingFormules] = useState(false);
 
     const handleUnitChange = (newUnit) => {
         const currentUnit = editedUnit;
-        const currentValue = parseFloat(editedValue);
-        
-        // Only convert if we have a valid numeric value and both units are valid
+        const currentValue = parseFloat(editedValue.replace(',', '.'));
         if (!isNaN(currentValue) && currentUnit && newUnit && currentUnit !== newUnit) {
+            // Convert only if both are recognized
             const convertedValue = convertToUnit(currentValue, currentUnit, newUnit);
-            setEditedValue(convertedValue.toString());
+            setEditedValue(String(convertedValue));
         }
-        
         setEditedUnit(newUnit);
     };
 
@@ -138,8 +183,21 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
             setEditedValue(property?.waarde || '');
             setEditedFormule(property?.formule || property?.Formule_expression || '');
             setEditedUnit(property?.eenheid || '');
+            setEditedFormuleId(property?.Formule_id ?? null);
         }
     }, [visible, property]);
+
+    const loadFormules = async () => {
+        try {
+            setLoadingFormules(true);
+            const list = await fetchFormules();
+            setAvailableFormules(Array.isArray(list) ? list : []);
+        } catch (e) {
+            setAvailableFormules([]);
+        } finally {
+            setLoadingFormules(false);
+        }
+    };
 
     const mapForUnit = useMemo(() => {
         const props = (existingPropertiesDraft || []).map(p => ({
@@ -158,16 +216,31 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
     }, [existingPropertiesDraft, editedUnit]);
 
     const preview = useMemo(() => {
-        if (!editedFormule || !/[+\-*/]/.test(editedFormule)) {
-            return { text: null, error: null };
-        }
+        if (!editedFormule || !/[+\-*/]/.test(editedFormule)) return { text: null, error: null };
         const { value, error } = evaluateFormule(editedFormule, mapForUnit);
-        const numericLog = formatNumberForLog(value, 6);
-        console.log('[EditPropertyModal] preview evaluation', { editedFormule, rawResult: value, ...numericLog, error });
-        if (error) return { text: error, error: true };
-        const roundedForPreview = roundToDecimals(value);
-        const finalText = `${roundedForPreview}${editedUnit ? ` ${editedUnit}` : ''}`;
-        console.log('[EditPropertyModal] preview final', { finalText });
+        if (error || value == null) return { text: error || 'Formule fout', error: true };
+        const hasMulDiv = /[*/]/.test(editedFormule);
+        let displayValue = value;
+        let showUnit = false;
+        const u = sanitizeUnit(editedUnit);
+        const isLength = ['m','cm','mm'].includes(u);
+        const isMass = ['kg','g'].includes(u);
+        const isVolume = ['L','mL','m³'].includes(u);
+        const isArea = ['m²','cm²','mm²'].includes(u);
+        if (u) {
+            if (!hasMulDiv && (isLength || isMass || isVolume)) {
+                // Convert additive formulas for linear/mass/volume units
+                const base = isLength ? 'm' : isMass ? 'kg' : (isVolume ? (u === 'm³' ? 'm³' : 'L') : u);
+                displayValue = convertToUnit(value, base, u);
+                showUnit = true;
+            } else if (hasMulDiv && (isArea || (isVolume && u !== 'L'))) {
+                // Convert multiplicative formulas to area/volume units if explicitly chosen (avoid showing 'L' for cubic unless chosen)
+                const base = isArea ? 'm²' : 'm³';
+                displayValue = convertToUnit(value, base, u);
+                showUnit = true;
+            }
+        }
+        const finalText = `${roundToDecimals(displayValue)}${showUnit ? ` ${u}` : ''}`;
         return { text: finalText, error: false };
     }, [editedFormule, mapForUnit, editedUnit]);
 
@@ -178,23 +251,42 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
         let waardeToSend = editedValue; // Default to manually entered value
 
         if (isFormule) {
-            // Use the already calculated preview value, which is correct.
             const { value: calculatedValue, error } = evaluateFormule(editedFormule, mapForUnit);
             if (!error && calculatedValue !== null) {
-                // The result from evaluateFormule is in the base unit (m).
-                // If a different unit is selected for the property, convert the final result.
-                waardeToSend = convertToUnit(calculatedValue, 'm', editedUnit || 'm');
+                const hasMulDiv = /[*/]/.test(editedFormule);
+                const u = sanitizeUnit(editedUnit);
+                const isLength = ['m','cm','mm'].includes(u);
+                const isMass = ['kg','g'].includes(u);
+                const isVolume = ['L','mL','m³'].includes(u);
+                const isArea = ['m²','cm²','mm²'].includes(u);
+                let base = 'm'; // default
+                if (isMass) base = 'kg';
+                else if (isVolume) base = u === 'm³' ? 'm³' : 'L';
+                else if (isArea) base = 'm²';
+                if (hasMulDiv) {
+                    // Multiplicative: allow area/volume conversion only, skip linear/mass if chosen incorrectly
+                    if (isArea || isVolume) {
+                        waardeToSend = convertToUnit(calculatedValue, base, u);
+                    } else {
+                        waardeToSend = calculatedValue; // store base value
+                    }
+                } else {
+                    // Additive/subtractive: allow length/mass/volume conversions
+                    if (isLength || isMass || isVolume) {
+                        waardeToSend = convertToUnit(calculatedValue, base, u);
+                    } else {
+                        waardeToSend = calculatedValue; // base or unchanged
+                    }
+                }
             } else {
-                // If there's an error, we can choose to block saving or save the error state.
-                // For now, we'll just use the last known good value or the input.
-                waardeToSend = editedValue;
+                waardeToSend = editedValue; // fallback
             }
         }
 
         const payload = {
             name: editedName.trim() || property.name,
             waarde: String(roundToDecimals(waardeToSend)), // Ensure it's a rounded string
-            Formule_id: property?.Formule_id || null,
+            Formule_id: editedFormuleId ?? null,
             eenheid: editedUnit || '',
         };
 
@@ -207,7 +299,7 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
                 formule: isFormule ? editedFormule : '', // Pass back the formule expression for consistency
                 eenheid: payload.eenheid,
                 // Pass back other relevant fields from the original property if needed
-                Formule_id: property.Formule_id,
+                Formule_id: editedFormuleId ?? null,
                 Formule_expression: isFormule ? editedFormule : '',
             });
             onClose();
@@ -248,7 +340,15 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
     const existingExpression = property?.formule || property?.Formule_expression || '';
     const hasExistingFormule = !!(existingExpression && /[+\-*/]/.test(existingExpression));
     const userIsTypingFormule = editedFormule && /[+\-*/]/.test(editedFormule);
-    const showFormuleField = hasExistingFormule || userIsTypingFormule;
+    // Include picker state so pressing the button reveals the formule UI even before typing/selecting
+    const showFormuleField = hasExistingFormule || userIsTypingFormule || !!editedFormuleId || showFormulePicker;
+
+    // Auto-load formulas when picker becomes visible and we have none yet
+    useEffect(() => {
+        if (showFormulePicker && !availableFormules.length && !loadingFormules) {
+            loadFormules();
+        }
+    }, [showFormulePicker]);
 
     return (
         <>
@@ -265,6 +365,20 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
                         style={AppStyles.formInput}
                     />
 
+                    {!showFormuleField && (
+                        <View style={{ marginTop: 8, marginBottom: 4 }}>
+                            <TouchableOpacity
+                                onPress={async () => {
+                                    setShowFormulePicker((v) => !v);
+                                    if (!availableFormules.length) await loadFormules();
+                                }}
+                                style={{ alignSelf: 'flex-start', paddingVertical: 8, paddingHorizontal: 12, backgroundColor: colors.blue50, borderRadius: 6, borderWidth: 1, borderColor: colors.blue200 }}
+                            >
+                                <Text style={{ color: colors.blue700, fontWeight: '600' }}>Formule kiezen</Text>
+                            </TouchableOpacity>
+                        </View>
+                    )}
+
                     {showFormuleField && (
                         <>
                             <Text style={[AppStyles.formLabel, { marginTop: 12 }]}>Formule</Text>
@@ -274,12 +388,66 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
                                 onChangeText={(text) => { setEditedFormule(text); }}
                                 style={AppStyles.formInput}
                             />
+                            <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+                                <TouchableOpacity
+                                    onPress={async () => {
+                                        setShowFormulePicker((v) => !v);
+                                        if (!availableFormules.length) await loadFormules();
+                                    }}
+                                    style={{ paddingVertical: 8, paddingHorizontal: 12, backgroundColor: colors.blue50, borderRadius: 6, borderWidth: 1, borderColor: colors.blue200 }}
+                                >
+                                    <Text style={{ color: colors.blue700, fontWeight: '600' }}>Formule kiezen</Text>
+                                </TouchableOpacity>
+                                {(editedFormuleId || editedFormule) && (
+                                    <TouchableOpacity
+                                        onPress={() => { setEditedFormuleId(null); setEditedFormule(''); setShowFormulePicker(false); }}
+                                        style={{ paddingVertical: 8, paddingHorizontal: 12, backgroundColor: colors.lightGray100, borderRadius: 6, borderWidth: 1, borderColor: colors.lightGray300 }}
+                                    >
+                                        <Text style={{ color: colors.lightGray800, fontWeight: '600' }}>Loskoppelen</Text>
+                                    </TouchableOpacity>
+                                )}
+                            </View>
                             {editedFormule && /[+\-*/]/.test(editedFormule) && (
                                 preview.error ? (
                                     <Text style={{ color: colors.red600, marginTop: 6, fontSize: 14 }}>{preview.text}</Text>
                                 ) : preview.text ? (
                                     <Text style={{ color: colors.blue600, marginTop: 6, fontSize: 16 }}>{preview.text}</Text>
                                 ) : null
+                            )}
+
+                            {showFormulePicker && (
+                                <View style={{ marginTop: 8, borderWidth: 1, borderColor: colors.lightGray300, borderRadius: 8, maxHeight: 220, overflow: 'hidden' }}>
+                                    <View style={{ paddingVertical: 8, paddingHorizontal: 12, backgroundColor: colors.lightGray50, borderBottomWidth: 1, borderBottomColor: colors.lightGray200 }}>
+                                        <Text style={{ color: colors.lightGray800, fontWeight: '600' }}>Kies een formule</Text>
+                                    </View>
+                                    <View style={{ padding: 8 }}>
+                                        {loadingFormules ? (
+                                            <Text style={{ color: colors.lightGray700, paddingVertical: 8 }}>Laden…</Text>
+                                        ) : (availableFormules.length === 0 ? (
+                                            <View style={{ paddingVertical: 8 }}>
+                                                <Text style={{ color: colors.lightGray700 }}>Geen formules</Text>
+                                                <Text style={{ color: colors.lightGray500, marginTop: 2 }}>Voeg eerst een formule toe</Text>
+                                            </View>
+                                        ) : (
+                                            availableFormules.map((f) => (
+                                                <TouchableOpacity
+                                                    key={f.id}
+                                                    onPress={() => {
+                                                        setEditedFormuleId(f.id);
+                                                        setEditedFormule(f.formule || '');
+                                                        setShowFormulePicker(false);
+                                                    }}
+                                                    style={{ paddingVertical: 10, paddingHorizontal: 8, borderRadius: 6, borderWidth: 1, borderColor: (editedFormuleId === f.id) ? colors.blue300 : 'transparent', backgroundColor: (editedFormuleId === f.id) ? colors.blue50 : colors.white, marginBottom: 6 }}
+                                                >
+                                                    <Text style={{ fontWeight: '600', color: colors.lightGray900 }}>{f.name || 'Naamloos'}</Text>
+                                                    {f.formule ? (
+                                                        <Text style={{ color: colors.lightGray700, marginTop: 2 }}>{f.formule}</Text>
+                                                    ) : null}
+                                                </TouchableOpacity>
+                                            ))
+                                        ))}
+                                    </View>
+                                </View>
                             )}
                         </>
                     )}
@@ -294,7 +462,7 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
 
                     <Text style={[AppStyles.formLabel, { marginTop: 12 }]}>Eenheid</Text>
                     <View style={styles.unitPickerContainer}>
-                        {['Geen', 'm', 'cm', 'mm', 'kg', 'g', 'L', 'mL'].map((unit) => (
+                        {['Geen', 'm', 'cm', 'mm', 'm²', 'cm²', 'mm²', 'm³', 'kg', 'g', 'L', 'mL'].map((unit) => (
                             <TouchableOpacity
                                 key={unit}
                                 style={[
