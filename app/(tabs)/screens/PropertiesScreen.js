@@ -93,37 +93,52 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
             const g = globalThis;
             const cache = g.__tempPropertiesCache?.map;
             const resolutionMap = g.__tempObjectResolutionMap; // Map(tempId -> dbId)
-            // Migrate cached props if objectId resolved from a temp id
-            if (resolutionMap && typeof objectId === 'string' && !objectId.startsWith('temp_')) {
-                // Check any temp ids mapped to this db id and merge their cached props
-                if (cache && cache.has(objectId)) {
-                    // Already migrated
-                } else if (cache) {
-                    for (const [tempId, dbId] of resolutionMap.entries()) {
-                        if (dbId === objectId && cache.has(tempId)) {
-                            const entry = cache.get(tempId);
-                            cache.set(objectId, entry);
-                            cache.delete(tempId);
-                            break;
-                        }
-                    }
-                }
+
+            // Helper: sorteren op id (numeriek), daarna fallback op naam
+            const sortPropsById = (arr) => {
+                return [...arr].sort((a, b) => {
+                    const parseId = (val) => {
+                        if (val === null || val === undefined) return Number.POSITIVE_INFINITY;
+                        const n = parseInt(val, 10);
+                        return isNaN(n) ? Number.POSITIVE_INFINITY : n;
+                    };
+
+                    const aId = parseId(a.id);
+                    const bId = parseId(b.id);
+
+                    if (aId !== bId) return aId - bId;
+
+                    // Fallback: sorteer op naam als ids gelijk / geen geldige id
+                    return String(a.name || '').localeCompare(
+                        String(b.name || ''),
+                        undefined,
+                        { sensitivity: 'base' }
+                    );
+                });
+            };
+
+            // Geen cache? Dan gewoon DB-properties sorteren op id
+            if (!cache || !cache.has(objectId)) {
+                return sortPropsById(base);
             }
-            if (!cache || !cache.has(objectId)) return base;
+
             const now = Date.now();
             const entry = cache.get(objectId);
-            if (!entry || !Array.isArray(entry.props)) return base;
+            if (!entry || !Array.isArray(entry.props)) return sortPropsById(base);
+
             // Filter expired optimistic props
             if (entry.expires < now) {
                 cache.delete(objectId);
-                return base;
+                return sortPropsById(base);
             }
+
             // Build map keyed by name::formula so we can replace existing items with optimistic edits
             const byKey = new Map();
             base.forEach(p => {
                 const key = (p.name || '').toLowerCase() + '::' + (p.Formule_expression || '');
                 byKey.set(key, { ...p });
             });
+
             entry.props.forEach(p => {
                 const nameLc = (p.name || '').toLowerCase();
                 const key = nameLc + '::' + (p.Formule_expression || '');
@@ -136,10 +151,9 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
                 }
                 byKey.set(key, optimisticVal);
             });
+
             const merged = Array.from(byKey.values());
-            // Stable ordering: sort purely by name (case-insensitive) so optimistic entries appear where they will remain
-            merged.sort((a,b) => String(a.name||'').localeCompare(String(b.name||''), undefined, { sensitivity: 'base' }));
-            return merged;
+            return sortPropsById(merged);
         } catch (e) {
             console.warn('[PropertiesScreen] merge failed', e);
             return Array.isArray(item?.properties) ? item.properties : [];
