@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Modal, Platform, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, Modal, Platform, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import AppStyles, { colors } from '../../AppStyles';
-import { deleteProperty, fetchFormules, updateProperty } from '../../api';
+import { createFormule, deleteProperty, fetchFormuleByExpression, fetchFormules, fetchFormulesSafe, updateProperty } from '../../api';
+import WaardeInput from '../WaardeInput';
+import AddFormuleModal from './AddFormuleModal';
+import FormulePickerModal from './FormulePickerModal';
 
 // Extended unit table (length, mass, volume, area, cubic)
 const unitConversionTable = {
@@ -48,10 +51,21 @@ const convertToUnit = (value, fromUnit, toUnit) => {
 
 const buildPropertiesMap = (properties, outputUnit) => {
     const map = {};
+    const toBaseUnitFor = (unit) => {
+        const u = sanitizeUnit(unit);
+        if (!u) return null;
+        if (['m','cm','mm'].includes(u)) return 'm';
+        if (['kg','g'].includes(u)) return 'kg';
+        if (['L','mL'].includes(u)) return 'L';
+        if (['m³'].includes(u)) return 'm³';
+        if (['m²','cm²','mm²'].includes(u)) return 'm²';
+        return null;
+    };
     function getCalculatedValue(prop, visited = {}) {
         if (visited[prop.name]) return 0;
         visited[prop.name] = true;
         let val = prop.value;
+        let fromExpression = false;
         if (typeof val === 'string' && /[+\-*/]/.test(val)) {
             let Formule = val;
             properties.forEach(refProp => {
@@ -62,22 +76,45 @@ const buildPropertiesMap = (properties, outputUnit) => {
                 }
             });
             try {
+                // reject unsafe characters
                 if (/[^0-9+\-*/().\s]/.test(Formule)) {
                     return 'Error';
                 }
-                val = roundToDecimals(eval(Formule));
+                // Normalize common multiply symbols
+                Formule = Formule.replace(/[x×]/g, '*');
+                // Evaluate safely
+                val = new Function(`return ${Formule}`)();
+                val = roundToDecimals(val);
+                fromExpression = true;
             } catch (e) {
                 val = 'Error';
             }
         }
+        // Convert to requested output unit or per-type base unit
         if (prop.unit && outputUnit) {
-            const beforeUnitVal = Number(val);
-            val = convertToUnit(Number(val), prop.unit, outputUnit);
+            const numVal = Number(val);
+            if (isFinite(numVal)) {
+                if (outputUnit === '__BASE__') {
+                    const target = toBaseUnitFor(prop.unit);
+                    if (target && target !== prop.unit) {
+                        // If the value came from an expression, it should already be in base due to inputs normalized;
+                        // but converting again from the declared unit is harmless only when val was a raw value.
+                        if (!fromExpression) {
+                            return convertToUnit(numVal, prop.unit, target);
+                        } else {
+                            return numVal;
+                        }
+                    }
+                    return numVal;
+                } else {
+                    return convertToUnit(numVal, prop.unit, outputUnit);
+                }
+            }
         }
         return val;
     }
     properties.forEach(prop => {
-        if (prop.name.trim() !== '') {
+        if (prop.name && prop.name.trim() !== '') {
             map[prop.name.toLowerCase()] = getCalculatedValue(prop);
         }
     });
@@ -91,9 +128,15 @@ const evaluateFormule = (Formule, propertiesMap) => {
     }
     
     let expression = Formule;
-    // Replace property names with their numeric values from the map
+    // Normalize common multiply symbols
+    expression = expression.replace(/[x×]/g, '*');
+    // Replace property names with their numeric values from the map (escape regex specials)
+    const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     Object.keys(propertiesMap).forEach(key => {
-        const regex = new RegExp(`\\b${key}\\b`, 'gi');
+        const escaped = escapeRegex(key);
+        // If the name contains non-word chars, \b may not work; fall back to plain global replace
+        const hasNonWord = /[^A-Za-z0-9_]/.test(key);
+        const regex = hasNonWord ? new RegExp(escaped, 'gi') : new RegExp(`\\b${escaped}\\b`, 'gi');
         expression = expression.replace(regex, propertiesMap[key]);
     });
 
@@ -154,17 +197,61 @@ const formatNumberForLog = (n, decimals = 6) => {
 };
 
 const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft, onSaved }) => {
-    const initialFormule = property?.formule || property?.Formule_expression || '';
+    const initialFormule = property?.formule || property?.Formule_expression || property?.formules?.formule || '';
     const [editedName, setEditedName] = useState(property?.name || '');
     const [editedValue, setEditedValue] = useState(property?.waarde || '');
     const [editedFormule, setEditedFormule] = useState(initialFormule);
     const [editedUnit, setEditedUnit] = useState(property?.eenheid || '');
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     // Formula selection state
-    const [editedFormuleId, setEditedFormuleId] = useState(property?.Formule_id ?? null);
+    const [editedFormuleId, setEditedFormuleId] = useState(property?.Formule_id ?? property?.formule_id ?? null);
+    // Picker modal state
     const [showFormulePicker, setShowFormulePicker] = useState(false);
-    const [availableFormules, setAvailableFormules] = useState([]);
-    const [loadingFormules, setLoadingFormules] = useState(false);
+    const [formulesList, setFormulesList] = useState([]);
+    const [formulesLoading, setFormulesLoading] = useState(false);
+    const [formulesError, setFormulesError] = useState(null);
+    // Global cache to avoid refetch flashes
+    const getFormulesCache = () => {
+        try {
+            if (!globalThis.__formulesCache) {
+                globalThis.__formulesCache = { data: [], fetchedAt: 0, ttlMs: 60000 };
+            }
+            return globalThis.__formulesCache;
+        } catch (_) {
+            return { data: [], fetchedAt: 0, ttlMs: 60000 };
+        }
+    };
+
+    const loadFormules = async (force = false) => {
+        const cache = getFormulesCache();
+        const now = Date.now();
+        if (!force && cache.data.length && (now - cache.fetchedAt < cache.ttlMs)) {
+            setFormulesList(cache.data);
+            setFormulesError(null);
+            setFormulesLoading(false);
+            return;
+        }
+        setFormulesLoading(true);
+        setFormulesError(null);
+        const res = await fetchFormulesSafe();
+        if (res.success) {
+            setFormulesList(res.data);
+            cache.data = res.data;
+            cache.fetchedAt = now;
+            setFormulesError(null);
+        } else {
+            setFormulesError(res.error || 'Kon formules niet laden');
+        }
+        setFormulesLoading(false);
+    };
+
+    // Preload when modal opens to reduce perceived empty state
+    useEffect(() => {
+        if (visible) {
+            loadFormules(false);
+        }
+    }, [visible]);
+    const [showAddFormuleModal, setShowAddFormuleModal] = useState(false);
 
     const handleUnitChange = (newUnit) => {
         const currentUnit = editedUnit;
@@ -181,47 +268,46 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
         if (visible) {
             setEditedName(property?.name || '');
             setEditedValue(property?.waarde || '');
-            setEditedFormule(property?.formule || property?.Formule_expression || '');
+            setEditedFormule(property?.formule || property?.Formule_expression || property?.formules?.formule || '');
             setEditedUnit(property?.eenheid || '');
-            setEditedFormuleId(property?.Formule_id ?? null);
+            setEditedFormuleId(property?.Formule_id ?? property?.formule_id ?? null);
         }
     }, [visible, property]);
 
-    const loadFormules = async () => {
-        try {
-            setLoadingFormules(true);
-            const list = await fetchFormules();
-            setAvailableFormules(Array.isArray(list) ? list : []);
-        } catch (e) {
-            setAvailableFormules([]);
-        } finally {
-            setLoadingFormules(false);
-        }
-    };
+    // No formule picker; typing is primary interaction
 
     const mapForUnit = useMemo(() => {
-        const props = (existingPropertiesDraft || []).map(p => ({
-            name: p.name,
-            value: p.formule && /[+\-*/]/.test(p.formule)
-                ? (() => {
-                    const innerMap = buildPropertiesMap(existingPropertiesDraft.map(x => ({ name: x.name, value: x.waarde, unit: x.eenheid || '' })), p.eenheid || editedUnit || 'm');
-                    const { value: innerVal, error: innerErr } = evaluateFormule(p.formule, innerMap);
-                    return innerErr ? 'Error' : String(innerVal);
-                })()
-                : p.waarde,
-            unit: p.eenheid || ''
-        }));
-        const result = buildPropertiesMap(props, editedUnit || 'm');
-        return result;
-    }, [existingPropertiesDraft, editedUnit]);
+        const props = (existingPropertiesDraft || []).map(p => {
+            const expr = p?.Formule_expression || p?.formule || p?.formules?.formule || '';
+            const isExpr = expr && /[+\-*/]/.test(expr);
+            return {
+                name: p.name,
+                value: isExpr
+                    ? (() => {
+                        // Evaluate nested formulas using base-normalized inputs
+                        const innerMap = buildPropertiesMap(
+                            (existingPropertiesDraft || []).map(x => ({ name: x.name, value: x.waarde, unit: x.eenheid || '' })),
+                            '__BASE__'
+                        );
+                        const { value: innerVal, error: innerErr } = evaluateFormule(expr, innerMap);
+                        return innerErr ? 'Error' : String(innerVal);
+                    })()
+                    : p.waarde,
+                unit: p.eenheid || ''
+            };
+        });
+        // Build the top-level substitution map in base units
+        return buildPropertiesMap(props, '__BASE__');
+    }, [existingPropertiesDraft]);
 
-    const preview = useMemo(() => {
-        if (!editedFormule || !/[+\-*/]/.test(editedFormule)) return { text: null, error: null };
+    // Compute numeric display value and target unit for current formula
+    const computedDisplay = useMemo(() => {
+        if (!editedFormule || !/[+\-*/x×]/.test(editedFormule)) return { value: null, unit: null, error: null };
         const { value, error } = evaluateFormule(editedFormule, mapForUnit);
-        if (error || value == null) return { text: error || 'Formule fout', error: true };
+        if (error || value == null) return { value: null, unit: null, error: error || 'Formule fout' };
         const hasMulDiv = /[*/]/.test(editedFormule);
         let displayValue = value;
-        let showUnit = false;
+        let unitToShow = null;
         const u = sanitizeUnit(editedUnit);
         const isLength = ['m','cm','mm'].includes(u);
         const isMass = ['kg','g'].includes(u);
@@ -229,80 +315,169 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
         const isArea = ['m²','cm²','mm²'].includes(u);
         if (u) {
             if (!hasMulDiv && (isLength || isMass || isVolume)) {
-                // Convert additive formulas for linear/mass/volume units
                 const base = isLength ? 'm' : isMass ? 'kg' : (isVolume ? (u === 'm³' ? 'm³' : 'L') : u);
                 displayValue = convertToUnit(value, base, u);
-                showUnit = true;
+                unitToShow = u;
             } else if (hasMulDiv && (isArea || (isVolume && u !== 'L'))) {
-                // Convert multiplicative formulas to area/volume units if explicitly chosen (avoid showing 'L' for cubic unless chosen)
                 const base = isArea ? 'm²' : 'm³';
                 displayValue = convertToUnit(value, base, u);
-                showUnit = true;
+                unitToShow = u;
             }
         }
-        const finalText = `${roundToDecimals(displayValue)}${showUnit ? ` ${u}` : ''}`;
-        return { text: finalText, error: false };
+        return { value: roundToDecimals(displayValue), unit: unitToShow, error: null };
     }, [editedFormule, mapForUnit, editedUnit]);
+
+    const preview = useMemo(() => {
+        if (!editedFormule || !/[+\-*/x×]/.test(editedFormule)) return { text: null, error: null };
+        if (computedDisplay.error) return { text: computedDisplay.error, error: true };
+        if (computedDisplay.value == null) return { text: null, error: null };
+        const finalText = `${computedDisplay.value}${computedDisplay.unit ? ` ${computedDisplay.unit}` : ''}`;
+        return { text: finalText, error: false };
+    }, [editedFormule, computedDisplay]);
+
+    // Keep the Waarde field in sync with computed display when a formula is present
+    useEffect(() => {
+        const isFormula = editedFormule && /[+\-*/x×]/.test(editedFormule);
+        if (!isFormula) return;
+        if (computedDisplay && typeof computedDisplay.value === 'number' && !isNaN(computedDisplay.value)) {
+            const currentNum = parseFloat(String(editedValue).replace(',', '.'));
+            if (!isFinite(currentNum) || Math.abs(currentNum - computedDisplay.value) > 1e-9) {
+                setEditedValue(String(computedDisplay.value));
+            }
+        }
+    }, [editedFormule, computedDisplay, setEditedValue]);
 
     const handleSave = async () => {
         if (!property?.id) { onClose(); return; }
-
-        const isFormule = editedFormule && /[+\-*/]/.test(editedFormule);
+        const isFormule = editedFormule && /[+\-*/x×]/.test(editedFormule);
         let waardeToSend = editedValue; // Default to manually entered value
+        let formuleIdToSend = editedFormuleId ?? null; // May be null for newly typed formulas
+        const isTemp = typeof property.id === 'string' && property.id.startsWith('temp_prop_');
 
+        // 1. Calculate waarde (fast, synchronous). Do NOT block UI for formula creation.
         if (isFormule) {
-            const { value: calculatedValue, error } = evaluateFormule(editedFormule, mapForUnit);
+            const normalizedExprForCalc = editedFormule.replace(/[x×]/g, '*');
+            const { value: calculatedValue, error } = evaluateFormule(normalizedExprForCalc, mapForUnit);
             if (!error && calculatedValue !== null) {
-                const hasMulDiv = /[*/]/.test(editedFormule);
+                const hasMulDiv = /[*/]/.test(normalizedExprForCalc);
                 const u = sanitizeUnit(editedUnit);
-                const isLength = ['m','cm','mm'].includes(u);
-                const isMass = ['kg','g'].includes(u);
-                const isVolume = ['L','mL','m³'].includes(u);
-                const isArea = ['m²','cm²','mm²'].includes(u);
-                let base = 'm'; // default
+                const isLength = ['m', 'cm', 'mm'].includes(u);
+                const isMass = ['kg', 'g'].includes(u);
+                const isVolume = ['L', 'mL', 'm³'].includes(u);
+                const isArea = ['m²', 'cm²', 'mm²'].includes(u);
+                let base = 'm';
                 if (isMass) base = 'kg';
                 else if (isVolume) base = u === 'm³' ? 'm³' : 'L';
                 else if (isArea) base = 'm²';
                 if (hasMulDiv) {
-                    // Multiplicative: allow area/volume conversion only, skip linear/mass if chosen incorrectly
                     if (isArea || isVolume) {
                         waardeToSend = convertToUnit(calculatedValue, base, u);
                     } else {
-                        waardeToSend = calculatedValue; // store base value
+                        waardeToSend = calculatedValue;
                     }
                 } else {
-                    // Additive/subtractive: allow length/mass/volume conversions
                     if (isLength || isMass || isVolume) {
                         waardeToSend = convertToUnit(calculatedValue, base, u);
                     } else {
-                        waardeToSend = calculatedValue; // base or unchanged
+                        waardeToSend = calculatedValue;
                     }
                 }
-            } else {
-                waardeToSend = editedValue; // fallback
             }
+            // Note: we no longer perform targeted lookup/create synchronously here to avoid UI blocking
         }
 
-        const payload = {
+        const basePayload = {
             name: editedName.trim() || property.name,
-            waarde: String(roundToDecimals(waardeToSend)), // Ensure it's a rounded string
-            Formule_id: editedFormuleId ?? null,
+            waarde: String(roundToDecimals(waardeToSend)),
             eenheid: editedUnit || '',
+            Formule_id: formuleIdToSend ?? null, // may be null initially
         };
 
-        const success = await updateProperty(property.id, payload);
+        // 2. Optimistic UI update & close modal immediately
+        onSaved({
+            name: basePayload.name,
+            waarde: basePayload.waarde,
+            formule: isFormule ? editedFormule : '',
+            eenheid: basePayload.eenheid,
+            Formule_id: basePayload.Formule_id,
+            Formule_expression: isFormule ? editedFormule : '',
+        });
+        onClose();
 
-        if (success) {
-            onSaved({
-                name: payload.name,
-                waarde: payload.waarde,
-                formule: isFormule ? editedFormule : '', // Pass back the formule expression for consistency
-                eenheid: payload.eenheid,
-                // Pass back other relevant fields from the original property if needed
-                Formule_id: editedFormuleId ?? null,
-                Formule_expression: isFormule ? editedFormule : '',
-            });
-            onClose();
+        // 3. Skip persistence for temp properties
+        if (isTemp) {
+            console.log('[EditPropertyModal] Temp property edited locally, skipping backend update');
+            return;
+        }
+
+        // 4. Persist the base property (without blocking on formula creation)
+        const persisted = await updateProperty(property.id, basePayload);
+        if (!persisted) {
+            Alert.alert('Opslaan deels mislukt', 'Waarde tijdelijk bijgewerkt maar server update faalde. Probeer opnieuw.');
+        } else {
+            console.log('[EditPropertyModal] Property base update persisted');
+            try { if (typeof property?.onRefresh === 'function') property.onRefresh(); } catch (_) {}
+        }
+
+        // 5. Background formula linking (targeted lookup & create) so UI never blocks on network
+        if (isFormule && !formuleIdToSend && typeof editedFormule === 'string' && editedFormule.trim()) {
+            (async () => {
+                const trimmedExpr = editedFormule.replace(/[x×]/g, '*').trim();
+                console.log('[EditPropertyModal] Background formula linking start. Expr:', trimmedExpr);
+                let newId = null;
+                // Attempt targeted reuse
+                try {
+                    const existingSingle = await fetchFormuleByExpression(trimmedExpr);
+                    if (existingSingle?.id) {
+                        newId = existingSingle.id;
+                        console.log('[EditPropertyModal] Background targeted reuse success. Formula id:', newId);
+                    } else {
+                        // Fallback: broad fetch + client match
+                        const all = await fetchFormules();
+                        const match = Array.isArray(all) ? all.find(f => String(f.formule).replace(/[x×]/g,'*').trim() === trimmedExpr) : null;
+                        if (match?.id) {
+                            newId = match.id;
+                            console.log('[EditPropertyModal] Background broad reuse success. Formula id:', newId);
+                        }
+                    }
+                } catch (eLookup) {
+                    console.warn('[EditPropertyModal] Background formula reuse failed:', eLookup?.message);
+                }
+                // Create if still missing
+                if (!newId) {
+                    try {
+                        const friendlyNameBase = (editedName && editedName.trim()) || property?.name || 'Aangepaste formule';
+                        const friendlyName = `${friendlyNameBase}`;
+                        console.log('[EditPropertyModal] Background creating formula name:', friendlyName);
+                        const res = await createFormule(friendlyName, trimmedExpr);
+                        if (res && res.success && res.id) {
+                            newId = res.id;
+                            console.log('[EditPropertyModal] Background creation success. New id:', newId);
+                        } else {
+                            console.warn('[EditPropertyModal] Background creation failed:', res?.message);
+                        }
+                    } catch (eCreate) {
+                        console.warn('[EditPropertyModal] Background creation error:', eCreate?.message);
+                    }
+                }
+                // Patch property with formula id if obtained
+                if (newId) {
+                    try {
+                        const patchPayload = { ...basePayload, Formule_id: newId };
+                        const patched = await updateProperty(property.id, patchPayload);
+                        if (patched) {
+                            console.log('[EditPropertyModal] Background formula link persisted. Property id:', property.id, 'Formula id:', newId);
+                            try { if (typeof property?.onRefresh === 'function') property.onRefresh(); } catch (_) {}
+                        } else {
+                            console.warn('[EditPropertyModal] Background formula link patch failed');
+                        }
+                    } catch (ePatch) {
+                        console.warn('[EditPropertyModal] Background formula link patch error:', ePatch?.message);
+                    }
+                } else {
+                    console.log('[EditPropertyModal] Background formula linking ended. No id resolved for expr.');
+                }
+            })().catch(e => console.warn('[EditPropertyModal] Background formula linking outer error:', e?.message));
         }
     };
 
@@ -338,17 +513,6 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
     if (!visible) return null;
 
     const existingExpression = property?.formule || property?.Formule_expression || '';
-    const hasExistingFormule = !!(existingExpression && /[+\-*/]/.test(existingExpression));
-    const userIsTypingFormule = editedFormule && /[+\-*/]/.test(editedFormule);
-    // Include picker state so pressing the button reveals the formule UI even before typing/selecting
-    const showFormuleField = hasExistingFormule || userIsTypingFormule || !!editedFormuleId || showFormulePicker;
-
-    // Auto-load formulas when picker becomes visible and we have none yet
-    useEffect(() => {
-        if (showFormulePicker && !availableFormules.length && !loadingFormules) {
-            loadFormules();
-        }
-    }, [showFormulePicker]);
 
     return (
         <>
@@ -365,100 +529,51 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
                         style={AppStyles.formInput}
                     />
 
-                    {!showFormuleField && (
-                        <View style={{ marginTop: 8, marginBottom: 4 }}>
+                    {/* Formula input with picker button styled like Waarde input in AddPropertyScreen */}
+                    <Text style={[AppStyles.formLabel, { marginTop: 12 }]}>Formule</Text>
+                    <WaardeInput
+                        value={editedFormule || ''}
+                        isFormula={!!(editedFormule && /[+\-*/x×]/.test(editedFormule))}
+                        computedValue={computedDisplay && !computedDisplay.error ? computedDisplay.value : null}
+                        unit={computedDisplay && !computedDisplay.error ? (computedDisplay.unit || '') : ''}
+                        error={computedDisplay && computedDisplay.error ? computedDisplay.error : null}
+                        onChange={(text) => {
+                            setEditedFormule(text);
+                            if (text && editedFormuleId) setEditedFormuleId(null);
+                        }}
+                        onAddFormule={() => {
+                            setShowFormulePicker(true);
+                            // If not currently loading and list empty, trigger load
+                            if (!formulesLoading && formulesList.length === 0) {
+                                loadFormules(false);
+                            }
+                        }}
+                    />
+                    {(editedFormuleId || editedFormule) && (
+                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, marginBottom: 4, flexWrap: 'wrap' }}>
                             <TouchableOpacity
-                                onPress={async () => {
-                                    setShowFormulePicker((v) => !v);
-                                    if (!availableFormules.length) await loadFormules();
-                                }}
-                                style={{ alignSelf: 'flex-start', paddingVertical: 8, paddingHorizontal: 12, backgroundColor: colors.blue50, borderRadius: 6, borderWidth: 1, borderColor: colors.blue200 }}
+                                onPress={() => { setEditedFormuleId(null); setEditedFormule(''); }}
+                                style={{ paddingVertical: 8, paddingHorizontal: 12, backgroundColor: colors.lightGray100, borderRadius: 6, borderWidth: 1, borderColor: colors.lightGray300 }}
                             >
-                                <Text style={{ color: colors.blue700, fontWeight: '600' }}>Formule kiezen</Text>
+                                <Text style={{ color: colors.lightGray800, fontWeight: '600' }}>Loskoppelen</Text>
                             </TouchableOpacity>
                         </View>
                     )}
-
-                    {showFormuleField && (
-                        <>
-                            <Text style={[AppStyles.formLabel, { marginTop: 12 }]}>Formule</Text>
-                            <TextInput
-                                placeholder="Bijv. lengte * breedte"
-                                value={editedFormule}
-                                onChangeText={(text) => { setEditedFormule(text); }}
-                                style={AppStyles.formInput}
-                            />
-                            <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, marginBottom: 4, flexWrap: 'wrap' }}>
-                                <TouchableOpacity
-                                    onPress={async () => {
-                                        setShowFormulePicker((v) => !v);
-                                        if (!availableFormules.length) await loadFormules();
-                                    }}
-                                    style={{ paddingVertical: 8, paddingHorizontal: 12, backgroundColor: colors.blue50, borderRadius: 6, borderWidth: 1, borderColor: colors.blue200 }}
-                                >
-                                    <Text style={{ color: colors.blue700, fontWeight: '600' }}>Formule kiezen</Text>
-                                </TouchableOpacity>
-                                {(editedFormuleId || editedFormule) && (
-                                    <TouchableOpacity
-                                        onPress={() => { setEditedFormuleId(null); setEditedFormule(''); setShowFormulePicker(false); }}
-                                        style={{ paddingVertical: 8, paddingHorizontal: 12, backgroundColor: colors.lightGray100, borderRadius: 6, borderWidth: 1, borderColor: colors.lightGray300 }}
-                                    >
-                                        <Text style={{ color: colors.lightGray800, fontWeight: '600' }}>Loskoppelen</Text>
-                                    </TouchableOpacity>
-                                )}
-                            </View>
-                            {editedFormule && /[+\-*/]/.test(editedFormule) && (
-                                preview.error ? (
-                                    <Text style={{ color: colors.red600, marginTop: 6, fontSize: 14 }}>{preview.text}</Text>
-                                ) : preview.text ? (
-                                    <Text style={{ color: colors.blue600, marginTop: 6, fontSize: 16 }}>{preview.text}</Text>
-                                ) : null
-                            )}
-
-                            {showFormulePicker && (
-                                <View style={{ marginTop: 8, borderWidth: 1, borderColor: colors.lightGray300, borderRadius: 8, maxHeight: 220, overflow: 'hidden' }}>
-                                    <View style={{ paddingVertical: 8, paddingHorizontal: 12, backgroundColor: colors.lightGray50, borderBottomWidth: 1, borderBottomColor: colors.lightGray200 }}>
-                                        <Text style={{ color: colors.lightGray800, fontWeight: '600' }}>Kies een formule</Text>
-                                    </View>
-                                    <View style={{ padding: 8 }}>
-                                        {loadingFormules ? (
-                                            <Text style={{ color: colors.lightGray700, paddingVertical: 8 }}>Laden…</Text>
-                                        ) : (availableFormules.length === 0 ? (
-                                            <View style={{ paddingVertical: 8 }}>
-                                                <Text style={{ color: colors.lightGray700 }}>Geen formules</Text>
-                                                <Text style={{ color: colors.lightGray500, marginTop: 2 }}>Voeg eerst een formule toe</Text>
-                                            </View>
-                                        ) : (
-                                            availableFormules.map((f) => (
-                                                <TouchableOpacity
-                                                    key={f.id}
-                                                    onPress={() => {
-                                                        setEditedFormuleId(f.id);
-                                                        setEditedFormule(f.formule || '');
-                                                        setShowFormulePicker(false);
-                                                    }}
-                                                    style={{ paddingVertical: 10, paddingHorizontal: 8, borderRadius: 6, borderWidth: 1, borderColor: (editedFormuleId === f.id) ? colors.blue300 : 'transparent', backgroundColor: (editedFormuleId === f.id) ? colors.blue50 : colors.white, marginBottom: 6 }}
-                                                >
-                                                    <Text style={{ fontWeight: '600', color: colors.lightGray900 }}>{f.name || 'Naamloos'}</Text>
-                                                    {f.formule ? (
-                                                        <Text style={{ color: colors.lightGray700, marginTop: 2 }}>{f.formule}</Text>
-                                                    ) : null}
-                                                </TouchableOpacity>
-                                            ))
-                                        ))}
-                                    </View>
-                                </View>
-                            )}
-                        </>
-                    )}
+                    {/* Error is displayed within WaardeInput; no separate preview line needed */}
 
                     <Text style={[AppStyles.formLabel, { marginTop: 12 }]}>Waarde</Text>
                     <TextInput
                         placeholder="Bijv. 20"
                         value={editedValue}
                         onChangeText={setEditedValue}
-                        style={AppStyles.formInput}
+                        editable={!(editedFormule && /[+\-*/x×]/.test(editedFormule))}
+                        style={[AppStyles.formInput, (editedFormule && /[+\-*/x×]/.test(editedFormule)) && { backgroundColor: '#F9FAFB', color: colors.lightGray800 }]}
                     />
+                    {editedFormule && /[+\-*/x×]/.test(editedFormule) && (
+                        <Text style={{ color: colors.lightGray600, marginTop: 4 }}>
+                            Waarde wordt automatisch berekend{computedDisplay.unit ? ` (${computedDisplay.unit})` : ''}
+                        </Text>
+                    )}
 
                     <Text style={[AppStyles.formLabel, { marginTop: 12 }]}>Eenheid</Text>
                     <View style={styles.unitPickerContainer}>
@@ -583,6 +698,45 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
                 </View>
             </View>
         </Modal>
+
+        {/* Formule Picker Modal */}
+        {showFormulePicker && (
+            <FormulePickerModal
+                visible={showFormulePicker}
+                onClose={() => setShowFormulePicker(false)}
+                Formules={formulesList}
+                loading={formulesLoading}
+                error={formulesError}
+                onRetry={() => loadFormules(true)}
+                onSelectFormule={(f) => {
+                    if (f?.id) {
+                        setEditedFormuleId(f.id);
+                        setEditedFormule(String(f.formule || ''));
+                    }
+                }}
+                onAddFormule={() => {
+                    setShowFormulePicker(false);
+                    setShowAddFormuleModal(true);
+                }}
+                onEditFormule={undefined}
+            />
+        )}
+
+        {/* Add Formule Modal (create new) */}
+        {showAddFormuleModal && (
+            <AddFormuleModal
+                visible={showAddFormuleModal}
+                onClose={() => setShowAddFormuleModal(false)}
+                onSave={(saved) => {
+                    // Update local selection to the newly created/edited formula
+                    if (saved?.id && saved.formule != null) {
+                        setEditedFormuleId(saved.id);
+                        setEditedFormule(String(saved.formule));
+                    }
+                    setShowAddFormuleModal(false);
+                }}
+            />
+        )}
         </>
     );
 };

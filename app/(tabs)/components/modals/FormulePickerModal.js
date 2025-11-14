@@ -1,8 +1,18 @@
-import { Calculator, Plus } from 'lucide-react-native';
+import { Calculator, Plus, RefreshCw } from 'lucide-react-native';
 import { Modal, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import AppStyles, { colors } from '../../AppStyles';
 
-const FormulePickerModal = ({ visible, onClose, Formules = [], onSelectFormule, onEditFormule, onAddFormule }) => {
+const FormulePickerModal = ({
+    visible,
+    onClose,
+    Formules = [],
+    onSelectFormule,
+    onEditFormule,
+    onAddFormule,
+    loading = false,
+    error = null,
+    onRetry
+}) => {
     // Extra safety check to ensure Formules is always an array
     const FormulesList = Array.isArray(Formules) ? Formules : [];
     
@@ -20,15 +30,31 @@ const FormulePickerModal = ({ visible, onClose, Formules = [], onSelectFormule, 
                     </View>
 
                     <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={{ paddingBottom: 12 }}>
-                        {FormulesList.length === 0 ? (
+                        {loading ? (
+                            <View style={{ padding: 24, alignItems: 'center' }}>
+                                <Calculator size={42} color={colors.lightGray300} />
+                                <Text style={{ marginTop: 14, color: colors.lightGray600, fontWeight: '600' }}>Formules laden...</Text>
+                                <Text style={{ marginTop: 4, color: colors.lightGray500, fontSize: 13 }}>Even geduld als de server ontwaakt.</Text>
+                            </View>
+                        ) : error ? (
+                            <View style={{ padding: 24, alignItems: 'center' }}>
+                                <Text style={{ color: colors.red600, fontWeight: '600', fontSize: 16 }}>Kon formules niet laden</Text>
+                                <Text style={{ marginTop: 6, color: colors.lightGray600, fontSize: 13 }}>{error}</Text>
+                                {onRetry && (
+                                    <TouchableOpacity
+                                        onPress={onRetry}
+                                        style={{ flexDirection:'row', alignItems:'center', marginTop:16, backgroundColor: colors.blue600, paddingVertical:10, paddingHorizontal:16, borderRadius:8 }}
+                                    >
+                                        <RefreshCw color="white" size={16} />
+                                        <Text style={{ color:'white', fontWeight:'600', marginLeft:8 }}>Opnieuw</Text>
+                                    </TouchableOpacity>
+                                )}
+                            </View>
+                        ) : FormulesList.length === 0 ? (
                             <View style={{ padding: 20, alignItems: 'center' }}>
                                 <Calculator size={48} color={colors.lightGray400} />
-                                <Text style={[AppStyles.infoText, { marginTop: 12 }]}>
-                                    Geen formules beschikbaar
-                                </Text>
-                                <Text style={[AppStyles.infoText, { marginTop: 4, fontSize: 14, color: colors.lightGray500 }]}>
-                                    Voeg je eerste formule toe
-                                </Text>
+                                <Text style={[AppStyles.infoText, { marginTop: 12 }]}>Geen formules beschikbaar</Text>
+                                <Text style={[AppStyles.infoText, { marginTop: 4, fontSize: 14, color: colors.lightGray500 }]}>Voeg je eerste formule toe</Text>
                             </View>
                         ) : (
                             <View>

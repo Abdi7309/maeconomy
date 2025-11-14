@@ -43,14 +43,8 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
         return <View style={[AppStyles.screen, { justifyContent: 'center', alignItems: 'center' }]}><Text style={AppStyles.emptyStateText}>Item not found...</Text></View>;
     }
 
-    // Auto-refresh when this screen mounts or when objectId changes; also clear optimistic cache overlay for this object
+    // Auto-refresh when this screen mounts or when objectId changes
     useEffect(() => {
-        try {
-            const g = globalThis;
-            if (g.__tempPropertiesCache && g.__tempPropertiesCache.map) {
-                g.__tempPropertiesCache.map.delete(objectId);
-            }
-        } catch (_) {}
         if (typeof onRefresh === 'function') {
             onRefresh();
         }
@@ -124,24 +118,27 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
                 cache.delete(objectId);
                 return base;
             }
-            const merged = [...base];
-            const existingNames = new Set(base.map(p => (p.name || '').toLowerCase() + '::' + (p.Formule_expression || '')));
-            entry.props.forEach(p => {
+            // Build map keyed by name::formula so we can replace existing items with optimistic edits
+            const byKey = new Map();
+            base.forEach(p => {
                 const key = (p.name || '').toLowerCase() + '::' + (p.Formule_expression || '');
-                if (!existingNames.has(key)) {
-                    merged.push({ ...p });
+                byKey.set(key, { ...p });
+            });
+            entry.props.forEach(p => {
+                const nameLc = (p.name || '').toLowerCase();
+                const key = nameLc + '::' + (p.Formule_expression || '');
+                const optimisticVal = { ...p, __optimistic: true, __createdAt: p.__createdAt || now };
+                // Remove any existing entries with the same name (regardless of old formula), then insert
+                for (const k of Array.from(byKey.keys())) {
+                    if (k.startsWith(nameLc + '::')) {
+                        byKey.delete(k);
+                    }
                 }
+                byKey.set(key, optimisticVal);
             });
-            // Sort: optimistic just-added first by __createdAt desc, then others by name
-            merged.sort((a,b) => {
-                const aOpt = a.__optimistic ? 1 : 0;
-                const bOpt = b.__optimistic ? 1 : 0;
-                if (aOpt !== bOpt) return bOpt - aOpt; // optimistics first
-                const aTime = a.__createdAt || 0;
-                const bTime = b.__createdAt || 0;
-                if (aOpt && bOpt && aTime !== bTime) return bTime - aTime;
-                return String(a.name||'').localeCompare(String(b.name||''));
-            });
+            const merged = Array.from(byKey.values());
+            // Stable ordering: sort purely by name (case-insensitive) so optimistic entries appear where they will remain
+            merged.sort((a,b) => String(a.name||'').localeCompare(String(b.name||''), undefined, { sensitivity: 'base' }));
             return merged;
         } catch (e) {
             console.warn('[PropertiesScreen] merge failed', e);

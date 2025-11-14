@@ -178,14 +178,14 @@ const ensureOptimisticPropCache = () => {
     try {
         const g = globalThis;
         if (!g.__tempPropertiesCache) {
-            g.__tempPropertiesCache = { map: new Map(), expiryMs: 9000 }; // 9s default retention
+            g.__tempPropertiesCache = { map: new Map(), expiryMs: 60000 }; // 60s default retention
         } else {
             if (!g.__tempPropertiesCache.map) g.__tempPropertiesCache.map = new Map();
-            if (!g.__tempPropertiesCache.expiryMs) g.__tempPropertiesCache.expiryMs = 9000;
+            if (!g.__tempPropertiesCache.expiryMs) g.__tempPropertiesCache.expiryMs = 60000;
         }
         return g.__tempPropertiesCache;
     } catch (_) {
-        return { map: new Map(), expiryMs: 9000 };
+        return { map: new Map(), expiryMs: 60000 };
     }
 };
 
@@ -271,13 +271,14 @@ const AddPropertyScreen = ({ ...props }) => {
 
     // Initialize or refresh the draft when item.properties changes
     useEffect(() => {
+        // Preserve formula expressions even if only available via nested relation (formules.formule)
         const draft = (item.properties || []).map(p => ({
             id: p.id,
             name: p.name,
             waarde: p.waarde,
-            Formule_id: p.Formule_id || null,
-            Formule_name: p.Formule_name || '',
-            Formule_expression: p.Formule_expression || '',
+            Formule_id: p.Formule_id || p.formule_id || null,
+            Formule_name: p.Formule_name || (p.formules?.name) || '',
+            Formule_expression: p.Formule_expression || p.formule || p.formules?.formule || '',
             eenheid: p.eenheid || ''
         }));
         setExistingPropertiesDraft(draft);
@@ -1061,10 +1062,15 @@ const AddPropertyScreen = ({ ...props }) => {
                                     return;
                                 }
 
-                                // 1. Create a new baseline draft with the single edited property updated
-                                const baselineDraft = originalDraft.map((p, i) => (
-                                    i === idx ? { ...p, ...updated } : p
-                                ));
+                                // 1. Create a new baseline draft with the single edited property updated (preserve expressions)
+                                const baselineDraft = originalDraft.map((p, i) => {
+                                    if (i !== idx) return p;
+                                    return {
+                                        ...p,
+                                        ...updated,
+                                        Formule_expression: updated.Formule_expression || updated.formule || p.Formule_expression || p.formule || p.formules?.formule || ''
+                                    };
+                                });
 
                                 // 2. Re-compute all properties that have a Formule
                                 const recomputedDraft = baselineDraft.map(p => {
@@ -1084,23 +1090,22 @@ const AddPropertyScreen = ({ ...props }) => {
                                     return p;
                                 });
 
-                                // 3. Identify and save all properties whose values have changed
+                                // 3. Identify and save all properties whose values have changed (excluding edited one)
                                 const updatePromises = [];
                                 recomputedDraft.forEach((newProp, index) => {
                                     const oldProp = originalDraft[index];
-                                    // Find properties where the value has changed due to recalculation
-                                    if (oldProp && newProp.waarde !== oldProp.waarde && newProp.id) {
-                                        console.log(`Value for '${newProp.name}' changed from ${oldProp.waarde} to ${newProp.waarde}. Queueing for save.`);
-                                        // The property that was manually edited is already saved by the modal.
-                                        // This condition saves all *other* dependent properties.
-                                        if (index !== idx) {
-                                            updatePromises.push(props.onUpdate(newProp.id, {
+                                    if (!oldProp) return;
+                                    if (index === idx) return; // edited property already handled by modal
+                                    if (newProp.id && newProp.waarde !== oldProp.waarde) {
+                                        console.log(`[EditPropertyModal callback] Dependent property '${newProp.name}' recalculated (${oldProp.waarde} -> ${newProp.waarde}), queuing save.`);
+                                        updatePromises.push(
+                                            props.onUpdate(newProp.id, {
                                                 name: newProp.name,
                                                 waarde: newProp.waarde,
                                                 Formule_id: newProp.Formule_id,
                                                 eenheid: newProp.eenheid,
-                                            }));
-                                        }
+                                            })
+                                        );
                                     }
                                 });
 
@@ -1111,11 +1116,39 @@ const AddPropertyScreen = ({ ...props }) => {
                                     Alert.alert('Success', `${updatePromises.length} afhankelijke eigenschap(pen) zijn bijgewerkt.`);
                                 }
 
-                                // 4. Update the UI state with the final, recomputed values
-                                if (item.properties && Array.isArray(item.properties)) {
-                                    item.properties = recomputedDraft;
+                                // 4. Merge recomputed values back into full property objects preserving original relation data (formules, files)
+                                if (Array.isArray(item.properties)) {
+                                    const fullMerged = item.properties.map(orig => {
+                                        const match = recomputedDraft.find(r => r.id === orig.id);
+                                        if (!match) return orig;
+                                        return {
+                                            ...orig,
+                                            waarde: match.waarde,
+                                            eenheid: match.eenheid,
+                                            Formule_id: match.Formule_id,
+                                            Formule_expression: match.Formule_expression || orig.Formule_expression || orig.formule || orig.formules?.formule || ''
+                                        };
+                                    });
+                                    item.properties = fullMerged;
                                 }
                                 setExistingPropertiesDraft(recomputedDraft);
+
+                                // 4b. Optimistic overlay in Properties screen: cache the edited property
+                                try {
+                                    const editedProp = recomputedDraft[idx];
+                                    if (editedProp && editedProp.name) {
+                                        // Build a minimal optimistic payload mirroring PropertiesScreen expectations
+                                        const optimistic = [{
+                                            id: editedProp.id || `temp_edit_${Date.now()}`,
+                                            name: editedProp.name,
+                                            waarde: editedProp.waarde,
+                                            eenheid: editedProp.eenheid || '',
+                                            Formule_expression: editedProp.Formule_expression || (editedProp.formule || ''),
+                                            Formule_id: editedProp.Formule_id || null,
+                                        }];
+                                        addOptimisticProperties(objectIdForProperties, optimistic);
+                                    }
+                                } catch (_) { /* ignore optimistic cache errors */ }
 
                                 // 5. Close the modal
                                 setShowEditModal(false);

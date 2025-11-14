@@ -1023,6 +1023,55 @@ export const fetchFormules = async () => {
     }
 }
 
+// Safer structured variant used by picker with error propagation
+export const fetchFormulesSafe = async () => {
+    try {
+        const { data, error } = await supabase
+            .from('formules')
+            .select('id, name, formule, updated_at')
+            .order('name');
+        if (error) return { success: false, error: error.message || 'Onbekende fout', data: [] };
+        return { success: true, data: data || [] };
+    } catch (e) {
+        return { success: false, error: e.message || 'Onbekende fout', data: [] };
+    }
+};
+
+// Targeted single-formula lookup by normalized expression (replaces x/× with *)
+export const fetchFormuleByExpression = async (expression) => {
+    if (!expression) return null;
+    const normalized = String(expression).replace(/[x×]/g, '*').trim();
+    const normalizedLC = normalized.toLowerCase();
+    try {
+        // Try exact equality first
+        let { data, error } = await supabase
+            .from('formules')
+            .select('id, name, formule')
+            .eq('formule', normalized)
+            .limit(5);
+        if (error) {
+            console.warn('[fetchFormuleByExpression] eq lookup failed, falling back to client filter:', error.message);
+        }
+        let candidate = (data || []).find(f => String(f.formule).replace(/[x×]/g,'*').trim().toLowerCase() === normalizedLC);
+        if (candidate) return candidate;
+        // Fallback: ilike/like for case-insensitive partials, then client-side exact (case-insensitive)
+        const { data: likeData, error: likeErr } = await supabase
+            .from('formules')
+            .select('id, name, formule')
+            .ilike('formule', `%${normalized}%`)
+            .limit(20);
+        if (likeErr) {
+            console.warn('[fetchFormuleByExpression] ilike fallback failed:', likeErr.message);
+            return null;
+        }
+        candidate = (likeData || []).find(f => String(f.formule).replace(/[x×]/g,'*').trim().toLowerCase() === normalizedLC) || null;
+        return candidate;
+    } catch (err) {
+        console.error('[fetchFormuleByExpression] Unexpected error:', err);
+        return null;
+    }
+};
+
 export const createFormule = async (name, formule) => {
     try {
         console.log('[createFormule] Creating formula:', name, 'with formula:', formule);
@@ -1031,18 +1080,50 @@ export const createFormule = async (name, formule) => {
         const { data: { user } } = await supabase.auth.getUser();
         console.log('[createFormule] Current user:', user?.id || 'Not authenticated');
         
-        const { data, error } = await supabase
+        const normalizedExpr = String(formule).replace(/[x×]/g,'*').trim();
+        const attemptInsert = async (nm) => supabase
             .from('formules')
-            .insert([{ name, formule }])
-            .select()
-        
+            .insert([{ name: nm, formule: normalizedExpr }])
+            .select();
+
+        // Try original name; if unique constraint blocks, retry with invisible suffix to allow same visible names
+        let data, error;
+        ({ data, error } = await attemptInsert(name));
         if (error) {
-            console.error('[createFormule] Database error:', error);
-            throw error;
+            const msg = (error.message || '').toLowerCase();
+            const isUnique = error.code === '23505' || msg.includes('duplicate key') || msg.includes('unique constraint');
+            if (isUnique) {
+                console.warn('[createFormule] Name unique constraint triggered; retrying with invisible suffix');
+                const ZERO_WIDTH_SPACE = '\u200B';
+                let retries = 0;
+                let finalData = null;
+                let lastErr = error;
+                while (retries < 3 && !finalData) {
+                    const nm = name + ZERO_WIDTH_SPACE.repeat(retries + 1);
+                    const res = await attemptInsert(nm);
+                    if (res.error) {
+                        lastErr = res.error;
+                        const againUnique = (res.error.code === '23505') || ((res.error.message || '').toLowerCase().includes('duplicate key')) || ((res.error.message || '').toLowerCase().includes('unique constraint'));
+                        if (!againUnique) break;
+                        retries += 1;
+                        continue;
+                    }
+                    finalData = res.data;
+                }
+                if (!finalData) {
+                    console.error('[createFormule] Failed after suffix retries:', lastErr);
+                    throw lastErr;
+                }
+                data = finalData;
+                error = null;
+            } else {
+                console.error('[createFormule] Database error:', error);
+                throw error;
+            }
         }
         
         console.log('[createFormule] Formula created successfully:', data);
-        return { success: true, id: data[0].id }
+        return { success: true, id: data[0].id, record: data[0] }
     } catch (error) {
         console.error('[createFormule] Error creating formula:', error);
         return { success: false, message: error.message || 'Failed to create formula' }
@@ -1053,15 +1134,45 @@ export const updateFormule = async (id, name, formule) => {
     try {
         console.log('[updateFormule] Updating formula ID:', id, 'with name:', name, 'formula:', formule);
         
-        const { data, error } = await supabase
+        const normalizedExpr = String(formule).replace(/[x×]/g,'*').trim();
+        const attemptUpdate = async (nm) => supabase
             .from('formules')
-            .update({ name, formule, updated_at: new Date().toISOString() })
+            .update({ name: nm, formule: normalizedExpr, updated_at: new Date().toISOString() })
             .eq('id', id)
-            .select()
-        
+            .select();
+
+        let { data, error } = await attemptUpdate(name);
         if (error) {
-            console.error('[updateFormule] Database error:', error);
-            throw error;
+            const msg = (error.message || '').toLowerCase();
+            const isUnique = error.code === '23505' || msg.includes('duplicate key') || msg.includes('unique constraint');
+            if (isUnique) {
+                console.warn('[updateFormule] Name unique constraint; retrying with invisible suffix');
+                const ZERO_WIDTH_SPACE = '\u200B';
+                let retries = 0;
+                let finalData = null;
+                let lastErr = error;
+                while (retries < 3 && !finalData) {
+                    const nm = name + ZERO_WIDTH_SPACE.repeat(retries + 1);
+                    const res = await attemptUpdate(nm);
+                    if (res.error) {
+                        lastErr = res.error;
+                        const againUnique = (res.error.code === '23505') || ((res.error.message || '').toLowerCase().includes('duplicate key')) || ((res.error.message || '').toLowerCase().includes('unique constraint'));
+                        if (!againUnique) break;
+                        retries += 1;
+                        continue;
+                    }
+                    finalData = res.data;
+                }
+                if (!finalData) {
+                    console.error('[updateFormule] Failed after suffix retries:', lastErr);
+                    throw lastErr;
+                }
+                data = finalData;
+                error = null;
+            } else {
+                console.error('[updateFormule] Database error:', error);
+                throw error;
+            }
         }
         
         console.log('[updateFormule] Formula updated successfully:', data);
