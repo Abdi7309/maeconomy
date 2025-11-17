@@ -350,8 +350,8 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
     const handleSave = async () => {
         if (!property?.id) { onClose(); return; }
         const isFormule = editedFormule && /[+\-*/x×]/.test(editedFormule);
-        let waardeToSend = editedValue; // Default to manually entered value
-        let formuleIdToSend = editedFormuleId ?? null; // May be null for newly typed formulas
+        let waardeToSend = editedValue;
+        let formuleIdToSend = editedFormuleId ?? null;
         const isTemp = typeof property.id === 'string' && property.id.startsWith('temp_prop_');
 
         // 1. Calculate waarde (fast, synchronous). Do NOT block UI for formula creation.
@@ -386,32 +386,37 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
             // Note: we no longer perform targeted lookup/create synchronously here to avoid UI blocking
         }
 
-        const basePayload = {
-            name: editedName.trim() || property.name,
+        // Build separate payloads: one for UI (camel/Pascal), one for API (snake_case)
+        const basePayloadUi = {
+            name: (editedName.trim() || property.name),
             waarde: String(roundToDecimals(waardeToSend)),
             eenheid: editedUnit || '',
-            Formule_id: formuleIdToSend ?? null, // may be null initially
+            Formule_id: formuleIdToSend ?? null,
         };
 
-        // 2. Optimistic UI update & close modal immediately
+        const basePayloadApi = {
+            name: basePayloadUi.name,
+            waarde: basePayloadUi.waarde,
+            eenheid: basePayloadUi.eenheid,
+            // snake_case for backend
+            formule_id: basePayloadUi.Formule_id,
+        };
+
+        // Optimistic UI
         onSaved({
-            name: basePayload.name,
-            waarde: basePayload.waarde,
+            name: basePayloadUi.name,
+            waarde: basePayloadUi.waarde,
             formule: isFormule ? editedFormule : '',
-            eenheid: basePayload.eenheid,
-            Formule_id: basePayload.Formule_id,
+            eenheid: basePayloadUi.eenheid,
+            Formule_id: basePayloadUi.Formule_id,
             Formule_expression: isFormule ? editedFormule : '',
         });
         onClose();
 
-        // 3. Skip persistence for temp properties
-        if (isTemp) {
-            console.log('[EditPropertyModal] Temp property edited locally, skipping backend update');
-            return;
-        }
+        if (isTemp) { console.log('[EditPropertyModal] Temp property edited locally, skipping backend update'); return; }
 
-        // 4. Persist the base property (without blocking on formula creation)
-        const persisted = await updateProperty(property.id, basePayload);
+        // Persist with API payload
+        const persisted = await updateProperty(property.id, basePayloadApi);
         if (!persisted) {
             Alert.alert('Opslaan deels mislukt', 'Waarde tijdelijk bijgewerkt maar server update faalde. Probeer opnieuw.');
         } else {
@@ -419,11 +424,10 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
             try { if (typeof property?.onRefresh === 'function') property.onRefresh(); } catch (_) {}
         }
 
-        // 5. Background formula linking (targeted lookup & create) so UI never blocks on network
+        // Background formula link
         if (isFormule && !formuleIdToSend && typeof editedFormule === 'string' && editedFormule.trim()) {
             (async () => {
                 const trimmedExpr = editedFormule.replace(/[x×]/g, '*').trim();
-                console.log('[EditPropertyModal] Background formula linking start. Expr:', trimmedExpr);
                 let newId = null;
                 // Attempt targeted reuse
                 try {
@@ -463,10 +467,10 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
                 // Patch property with formula id if obtained
                 if (newId) {
                     try {
-                        const patchPayload = { ...basePayload, Formule_id: newId };
-                        const patched = await updateProperty(property.id, patchPayload);
+                        const patchPayloadApi = { ...basePayloadApi, formule_id: newId };
+                        const patched = await updateProperty(property.id, patchPayloadApi);
                         if (patched) {
-                            console.log('[EditPropertyModal] Background formula link persisted. Property id:', property.id, 'Formula id:', newId);
+                            console.log('[EditPropertyModal] Background formula link persisted.', { propertyId: property.id, newId });
                             try { if (typeof property?.onRefresh === 'function') property.onRefresh(); } catch (_) {}
                         } else {
                             console.warn('[EditPropertyModal] Background formula link patch failed');
@@ -773,4 +777,4 @@ const styles = {
     },
 };
 
-export default EditPropertyModal; 
+export default EditPropertyModal;

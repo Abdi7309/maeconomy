@@ -943,8 +943,32 @@ export const updateProperty = async (propertyId, { name, waarde, Formule_id, een
         }
         
         console.log('[updateProperty] Existing property:', existingProperty);
-        console.log('[updateProperty] Property owner:', existingProperty.objects?.user_id);
-        console.log('[updateProperty] Current user can edit:', existingProperty.objects?.user_id === user?.id);
+        const propertyOwnerId = existingProperty.objects?.user_id || null;
+        const isCurrentUserOwner = propertyOwnerId && user?.id ? propertyOwnerId === user.id : false;
+        console.log('[updateProperty] Property owner (info):', propertyOwnerId);
+        console.log('[updateProperty] Current user is property owner:', isCurrentUserOwner);
+
+        const runAdminUpdate = async () => {
+            console.log('[updateProperty] Using admin_update_property RPC');
+            const { error: rpcErr } = await supabase.rpc('admin_update_property', {
+                p_property_id: Number(propertyId),
+                p_name: name,
+                p_waarde: waarde,
+                p_eenheid: eenheid || '',
+                p_formule_id: Formule_id != null ? Number(Formule_id) : null
+            });
+            if (rpcErr) {
+                console.error('[updateProperty] RPC fallback failed:', rpcErr);
+                throw rpcErr;
+            }
+            console.log('[updateProperty] RPC update succeeded');
+        };
+
+        if (!isCurrentUserOwner && propertyOwnerId) {
+            await runAdminUpdate();
+            Alert.alert('Success', 'Property updated successfully!');
+            return true;
+        }
         
         let { data, error } = await supabase
             .from('eigenschappen')
@@ -962,17 +986,7 @@ export const updateProperty = async (propertyId, { name, waarde, Formule_id, een
             const msg = (error.message || '').toLowerCase();
             if (msg.includes('row level security') || msg.includes('permission denied') || msg.includes('violates row-level security')) {
                 console.warn('[updateProperty] RLS prevented update. Trying admin RPC fallback...');
-                const { error: rpcErr } = await supabase.rpc('admin_update_property', {
-                    p_property_id: Number(propertyId),
-                    p_name: name,
-                    p_waarde: waarde,
-                    p_eenheid: eenheid || '',
-                    p_formule_id: Formule_id != null ? Number(Formule_id) : null
-                });
-                if (rpcErr) {
-                    console.error('[updateProperty] RPC fallback failed:', rpcErr);
-                    throw rpcErr;
-                }
+                await runAdminUpdate();
             } else {
                 console.error('[updateProperty] Database error:', error);
                 throw error;
@@ -1075,12 +1089,12 @@ export const fetchFormuleByExpression = async (expression) => {
 export const createFormule = async (name, formule) => {
     try {
         console.log('[createFormule] Creating formula:', name, 'with formula:', formule);
-        
+
         // Check if user is authenticated
         const { data: { user } } = await supabase.auth.getUser();
         console.log('[createFormule] Current user:', user?.id || 'Not authenticated');
-        
-        const normalizedExpr = String(formule).replace(/[x×]/g,'*').trim();
+
+        const normalizedExpr = String(formule).replace(/[x×]/g, '*').trim();
         const attemptInsert = async (nm) => supabase
             .from('formules')
             .insert([{ name: nm, formule: normalizedExpr }])
@@ -1121,20 +1135,20 @@ export const createFormule = async (name, formule) => {
                 throw error;
             }
         }
-        
+
         console.log('[createFormule] Formula created successfully:', data);
-        return { success: true, id: data[0].id, record: data[0] }
+        return { success: true, id: data[0].id, record: data[0] };
     } catch (error) {
         console.error('[createFormule] Error creating formula:', error);
-        return { success: false, message: error.message || 'Failed to create formula' }
+        return { success: false, message: error.message || 'Failed to create formula' };
     }
-}
+};
 
 export const updateFormule = async (id, name, formule) => {
     try {
         console.log('[updateFormule] Updating formula ID:', id, 'with name:', name, 'formula:', formule);
-        
-        const normalizedExpr = String(formule).replace(/[x×]/g,'*').trim();
+
+        const normalizedExpr = String(formule).replace(/[x×]/g, '*').trim();
         const attemptUpdate = async (nm) => supabase
             .from('formules')
             .update({ name: nm, formule: normalizedExpr, updated_at: new Date().toISOString() })
@@ -1174,22 +1188,22 @@ export const updateFormule = async (id, name, formule) => {
                 throw error;
             }
         }
-        
+
         console.log('[updateFormule] Formula updated successfully:', data);
-        
+
         // For now, return success without recalculation
         // You can add recalculation logic later if needed
-        return { 
+        return {
             success: true,
             affected_properties: 0,
             recalculated: 0,
             failed: 0
-        }
+        };
     } catch (error) {
         console.error('[updateFormule] Error updating formula:', error);
-        return { success: false, message: error.message || 'Failed to update formula' }
+        return { success: false, message: error.message || 'Failed to update formula' };
     }
-}
+};
 
 export const deleteFormule = async (id) => {
     try {
