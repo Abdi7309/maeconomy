@@ -1,5 +1,14 @@
 import { Alert, Platform } from 'react-native';
-import { supabase } from './config/config';
+import CONFIG, { supabase } from './config/config';
+
+// Helper for timeouts to prevent hanging promises
+const withTimeout = (promise, ms = 10000, label = 'operation') => new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
+    promise.then(
+        (res) => { clearTimeout(timeoutId); resolve(res); },
+        (err) => { clearTimeout(timeoutId); reject(err); }
+    );
+});
 
 // Auth functions using Supabase Auth
 export const supabaseLogin = async (email, password) => {
@@ -367,42 +376,136 @@ export const fixMissingProfiles = async () => {
 const fetchObjectChildren = async (parentId) => {
     try {
         // 1) Direct children
-        const { data: directChildren, error } = await supabase
-      .from('objects')
-      .select(`
-        *,
-        eigenschappen(*,
-          formules(name, formule),
-          property_files(*)
-        )
-      `)
-      .eq('parent_id', parentId)
-      .order('naam')
-    
-    if (error) throw error
+        let directChildren = [];
+        let directError = null;
+
+        try {
+            ({ data: directChildren, error: directError } = await withTimeout(
+                supabase
+                    .from('objects')
+                    .select(`
+                        *,
+                        eigenschappen(*,
+                            formules(name, formule),
+                            property_files(*)
+                        )
+                    `)
+                    .eq('parent_id', parentId)
+                    .order('naam'),
+                500,
+                'fetch-children'
+            ));
+        } catch (e) {
+            console.warn('[fetchObjectChildren] Standard fetch failed, trying REST fallback...');
+            if (Platform.OS === 'web') {
+                try {
+                    let token = null;
+                    try {
+                        const key = `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+                        const stored = localStorage.getItem(key);
+                        if (stored) token = JSON.parse(stored).access_token;
+                    } catch (_) {}
+                    if (!token) { const { data } = await supabase.auth.getSession(); token = data?.session?.access_token; }
+
+                    if (token) {
+                        const queryParams = new URLSearchParams({
+                            select: '*,eigenschappen(*,formules(name,formule),property_files(*))',
+                            parent_id: `eq.${parentId}`,
+                            order: 'naam.asc'
+                        });
+                        const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/objects?${queryParams.toString()}`, {
+                            headers: {
+                                'Authorization': `Bearer ${token}`,
+                                'apikey': CONFIG.SUPABASE_ANON_KEY
+                            }
+                        });
+                        if (res.ok) {
+                            directChildren = await res.json();
+                            directError = null;
+                            console.log('[fetchObjectChildren] REST Fallback success');
+                        }
+                    }
+                } catch (restErr) { console.error('[fetchObjectChildren] REST Fallback failed', restErr); }
+            }
+            if (!directChildren && !directError) directError = e;
+        }
+
+        if (directError) throw directError;
+
         // 2) Linked children via object_links (best-effort; if table missing, skip)
         let linkedChildren = []
         let linkRows = []
         try {
-            const { data: lr, error: linkErr } = await supabase
-                .from('object_links')
-                .select('id, child_id, group_key')
-                .eq('parent_id', parentId)
+            // Also wrap this in timeout/fallback if critical, but for now standard timeout is okay as it's secondary
+            // We'll just use a short timeout to prevent hanging
+            const { data: lr, error: linkErr } = await withTimeout(
+                supabase
+                    .from('object_links')
+                    .select('id, child_id, group_key')
+                    .eq('parent_id', parentId),
+                500,
+                'fetch-links'
+            ).catch(() => ({ data: [], error: null })); // If it times out, just skip links for speed
+
             if (!linkErr && lr && lr.length) {
                 linkRows = lr
                 const linkedIds = lr.map(r => r.child_id) // allow duplicates (no Set)
                 if (linkedIds.length) {
-                    const { data: linkedObjs, error: linkedFetchErr } = await supabase
-                        .from('objects')
-                        .select(`
-                            *,
-                            eigenschappen(*,
-                                formules(name, formule),
-                                property_files(*)
-                            )
-                        `)
-                        .in('id', Array.from(new Set(linkedIds)))
-                        .order('naam')
+                    // Fetch linked objects - also needs resilience
+                    let linkedObjs = [];
+                    let linkedFetchErr = null;
+                    
+                    try {
+                        ({ data: linkedObjs, error: linkedFetchErr } = await withTimeout(
+                            supabase
+                                .from('objects')
+                                .select(`
+                                    *,
+                                    eigenschappen(*,
+                                        formules(name, formule),
+                                        property_files(*)
+                                    )
+                                `)
+                                .in('id', Array.from(new Set(linkedIds)))
+                                .order('naam'),
+                            500,
+                            'fetch-linked-objects'
+                        ));
+                    } catch (e) {
+                        // REST Fallback for linked objects
+                        if (Platform.OS === 'web') {
+                            try {
+                                let token = null;
+                                try {
+                                    const key = `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+                                    const stored = localStorage.getItem(key);
+                                    if (stored) token = JSON.parse(stored).access_token;
+                                } catch (_) {}
+                                if (!token) { const { data } = await supabase.auth.getSession(); token = data?.session?.access_token; }
+
+                                if (token) {
+                                    // .in() filter format: id=in.(val1,val2,...)
+                                    const idsStr = `(${Array.from(new Set(linkedIds)).join(',')})`;
+                                    const queryParams = new URLSearchParams({
+                                        select: '*,eigenschappen(*,formules(name,formule),property_files(*))',
+                                        id: `in.${idsStr}`,
+                                        order: 'naam.asc'
+                                    });
+                                    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/objects?${queryParams.toString()}`, {
+                                        headers: {
+                                            'Authorization': `Bearer ${token}`,
+                                            'apikey': CONFIG.SUPABASE_ANON_KEY
+                                        }
+                                    });
+                                    if (res.ok) {
+                                        linkedObjs = await res.json();
+                                        linkedFetchErr = null;
+                                    }
+                                }
+                            } catch (_) {}
+                        }
+                    }
+
                     if (!linkedFetchErr && Array.isArray(linkedObjs)) {
                         // Map id -> object for lookup, then rebuild array preserving duplicates by linkRows order
                         const objMap = new Map(linkedObjs.map(o => [o.id, o]))
@@ -414,48 +517,90 @@ const fetchObjectChildren = async (parentId) => {
             // Table may not exist or RLS might block; ignore and proceed with no links
             console.warn('[fetchObjectChildren] object_links not available or inaccessible, skipping links')
         }
+        const combined = [];
+        (directChildren || []).forEach((o) =>
+        combined.push({ ...o, __instanceKey: `dir:${o.id}` })
+        );
+        (linkedChildren || []).forEach((o, idx) => {
+        const linkId = linkRows[idx]?.id || `${parentId}:${o.id}:${idx}`;
+        combined.push({
+            ...o,
+            __instanceKey: `link:${linkId}`,
+            group_key: o.__link_group_key ?? o.group_key,
+        });
+        });
 
-        // Combine keeping duplicates: direct followed by linked instances
-        // Tag entries with __instanceKey for UI keys
-        const combined = []
-        ;(directChildren || []).forEach((o) => combined.push({ ...o, __instanceKey: `dir:${o.id}` }))
-        ;(linkedChildren || []).forEach((o, idx) => {
-            const linkId = linkRows[idx]?.id || `${parentId}:${o.id}:${idx}`
-            combined.push({ ...o, __instanceKey: `link:${linkId}`, group_key: o.__link_group_key ?? o.group_key })
-        })
-
-        // Get unique user IDs for this batch of children
-        const userIds = [...new Set(combined.map(obj => obj.user_id).filter(Boolean))];
-    
+        const userIds = Array.from(new Set(combined.map(obj => obj.user_id).filter(Boolean)));
+        
     // Fetch profiles for users
     let profileMap = {};
     if (userIds.length > 0) {
-      const { data: profiles } = await supabase
-        .from('profiles')
-        .select('id, username')
-        .in('id', userIds);
-      
-      (profiles || []).forEach(profile => {
-        profileMap[profile.id] = profile;
-      });
+      // Profile fetch is usually fast/cached, but let's wrap it too just in case
+      try {
+          const { data: profiles } = await withTimeout(
+            supabase
+                .from('profiles')
+                .select('id, username')
+                .in('id', userIds),
+            5000,
+            'fetch-profiles'
+          );
+          (profiles || []).forEach(profile => {
+            profileMap[profile.id] = profile;
+          });
+      } catch (e) {
+          console.warn('[fetchObjectChildren] Profile fetch timed out, trying REST fallback...');
+          if (Platform.OS === 'web') {
+              try {
+                  let token = null;
+                  try {
+                      const key = `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+                      const stored = localStorage.getItem(key);
+                      if (stored) token = JSON.parse(stored).access_token;
+                  } catch (_) {}
+                  if (!token) { const { data } = await supabase.auth.getSession(); token = data?.session?.access_token; }
+
+                  if (token) {
+                      const idsStr = `(${userIds.join(',')})`;
+                      const queryParams = new URLSearchParams({
+                          select: 'id,username',
+                          id: `in.${idsStr}`
+                      });
+                      const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/profiles?${queryParams.toString()}`, {
+                          headers: {
+                              'Authorization': `Bearer ${token}`,
+                              'apikey': CONFIG.SUPABASE_ANON_KEY
+                          }
+                      });
+                      if (res.ok) {
+                          const profiles = await res.json();
+                          (profiles || []).forEach(profile => {
+                              profileMap[profile.id] = profile;
+                          });
+                          console.log('[fetchObjectChildren] Profile REST Fallback success');
+                      }
+                  }
+              } catch (restErr) { console.error('[fetchObjectChildren] Profile REST Fallback failed', restErr); }
+          }
+      }
     }
     
-        const childrenWithGrandchildren = await Promise.all(
-                    combined.map(async (child) => {
-        const grandchildren = await fetchObjectChildren(child.id)
+    const childrenWithGrandchildren = await Promise.all(
+    combined.map(async (child) => {
+        const grandchildren = await fetchObjectChildren(child.id);
         const profile = profileMap[child.user_id];
         return {
-          ...child,
-          owner_name: profile?.username || 'Unknown',
-          properties: (child.eigenschappen || []).map(prop => ({
+        ...child,
+        owner_name: profile?.username || 'Unknown',
+        properties: (child.eigenschappen || []).map((prop) => ({
             ...prop,
-            files: prop.property_files || []
-          })),
-          children: grandchildren
-        }
-      })
-    )
-    
+            files: prop.property_files || [],
+        })),
+        children: grandchildren,
+        };
+    })
+    );
+
     return childrenWithGrandchildren
   } catch (error) {
     console.error('Error fetching children:', error)
@@ -468,56 +613,146 @@ export const fetchAndSetAllObjects = async (filterOption) => {
         console.log('[fetchAndSetAllObjects] Fetching objects with filter:', filterOption);
         
         // First get top-level direct objects (parent_id is null)
-        let query = supabase
-            .from('objects')
-            .select(`
-                *,
-                eigenschappen(*,
-                    formules(name, formule),
-                    property_files(*)
-                )
-            `)
-            .is('parent_id', null) // Top level objects only
-            .order('naam')
-        
-        if (filterOption && filterOption !== 'all') {
-            query = query.eq('user_id', filterOption)
+        let directTop = [];
+        let directError = null;
+
+        try {
+            let query = supabase
+                .from('objects')
+                .select(`
+                    *,
+                    eigenschappen(*,
+                        formules(name, formule),
+                        property_files(*)
+                    )
+                `)
+                .is('parent_id', null) // Top level objects only
+                .order('naam')
+            
+            if (filterOption && filterOption !== 'all') {
+                query = query.eq('user_id', filterOption)
+            }
+            
+            ({ data: directTop, error: directError } = await withTimeout(query, 500, 'fetch-top-objects'));
+
+        } catch (e) {
+            console.warn('[fetchAndSetAllObjects] Standard fetch failed, trying REST fallback...');
+            if (Platform.OS === 'web') {
+                try {
+                    let token = null;
+                    try {
+                        const key = `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+                        const stored = localStorage.getItem(key);
+                        if (stored) token = JSON.parse(stored).access_token;
+                    } catch (_) {}
+                    if (!token) { const { data } = await supabase.auth.getSession(); token = data?.session?.access_token; }
+
+                    if (token) {
+                        const params = {
+                            select: '*,eigenschappen(*,formules(name,formule),property_files(*))',
+                            parent_id: 'is.null',
+                            order: 'naam.asc'
+                        };
+                        if (filterOption && filterOption !== 'all') {
+                            params.user_id = `eq.${filterOption}`;
+                        }
+                        const queryParams = new URLSearchParams(params);
+                        const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/objects?${queryParams.toString()}`, {
+                            headers: {
+                                'Authorization': `Bearer ${token}`,
+                                'apikey': CONFIG.SUPABASE_ANON_KEY
+                            }
+                        });
+                        if (res.ok) {
+                            directTop = await res.json();
+                            directError = null;
+                            console.log('[fetchAndSetAllObjects] REST Fallback success');
+                        }
+                    }
+                } catch (restErr) { console.error('[fetchAndSetAllObjects] REST Fallback failed', restErr); }
+            }
+            if (!directTop && !directError) directError = e;
         }
         
-        const { data: directTop, error } = await query
-        
-        if (error) throw error
+        if (directError) throw directError
         
         console.log('[fetchAndSetAllObjects] Found', directTop?.length || 0, 'direct top-level objects');
         
         // Also get linked top-level objects (parent link at root). Best-effort; if table missing, skip.
         let linkedTop = []
         try {
-            const { data: lr, error: linkErr } = await supabase
-                .from('object_links')
-                .select('id, child_id, group_key')
-                .is('parent_id', null)
+            const { data: lr, error: linkErr } = await withTimeout(
+                supabase
+                    .from('object_links')
+                    .select('id, child_id, group_key')
+                    .is('parent_id', null),
+                500,
+                'fetch-top-links'
+            ).catch(() => ({ data: [], error: null }));
+
             if (!linkErr && lr && lr.length) {
                 const ids = Array.from(new Set(lr.map(r => r.child_id)))
                 if (ids.length) {
-                    let linkedQuery = supabase
-                        .from('objects')
-                        .select(`
-                            *,
-                            eigenschappen(*,
-                                formules(name, formule),
-                                property_files(*)
-                            )
-                        `)
-                        .in('id', ids)
-                        .order('naam')
-                    
-                    // Apply the same filter as direct objects
-                    if (filterOption && filterOption !== 'all') {
-                        linkedQuery = linkedQuery.eq('user_id', filterOption)
+                    let linkedObjs = [];
+                    let linkedFetchErr = null;
+
+                    try {
+                        let linkedQuery = supabase
+                            .from('objects')
+                            .select(`
+                                *,
+                                eigenschappen(*,
+                                    formules(name, formule),
+                                    property_files(*)
+                                )
+                            `)
+                            .in('id', ids)
+                            .order('naam')
+                        
+                        // Apply the same filter as direct objects
+                        if (filterOption && filterOption !== 'all') {
+                            linkedQuery = linkedQuery.eq('user_id', filterOption)
+                        }
+                        
+                        ({ data: linkedObjs, error: linkedFetchErr } = await withTimeout(linkedQuery, 500, 'fetch-top-linked-objs'));
+                    } catch (e) {
+                        // REST Fallback for top linked objects
+                        if (Platform.OS === 'web') {
+                            try {
+                                let token = null;
+                                try {
+                                    const key = `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+                                    const stored = localStorage.getItem(key);
+                                    if (stored) token = JSON.parse(stored).access_token;
+                                } catch (_) {}
+                                if (!token) { const { data } = await supabase.auth.getSession(); token = data?.session?.access_token; }
+
+                                if (token) {
+                                    const idsStr = `(${ids.join(',')})`;
+                                    const params = {
+                                        select: '*,eigenschappen(*,formules(name,formule),property_files(*))',
+                                        id: `in.${idsStr}`,
+                                        order: 'naam.asc'
+                                    };
+                                    if (filterOption && filterOption !== 'all') {
+                                        params.user_id = `eq.${filterOption}`;
+                                    }
+                                    const queryParams = new URLSearchParams(params);
+                                    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/objects?${queryParams.toString()}`, {
+                                        headers: {
+                                            'Authorization': `Bearer ${token}`,
+                                            'apikey': CONFIG.SUPABASE_ANON_KEY
+                                        }
+                                    });
+                                    if (res.ok) {
+                                        linkedObjs = await res.json();
+                                        linkedFetchErr = null;
+                                    }
+                                }
+                            } catch (_) {}
+                        }
                     }
-                    
-                    const { data: linkedObjs, error: linkedFetchErr } = await linkedQuery
+
                     if (!linkedFetchErr && Array.isArray(linkedObjs)) {
                         const map = new Map(linkedObjs.map(o => [o.id, o]))
                         linkedTop = lr.map(r => ({ ...map.get(r.child_id), __instanceKey: `rootlink:${r.id}`, group_key: r.group_key || map.get(r.child_id)?.group_key || null })).filter(Boolean)
@@ -533,13 +768,49 @@ export const fetchAndSetAllObjects = async (filterOption) => {
         console.log('[fetchAndSetAllObjects] Fetching profiles for users:', userIds);
         
         // Fetch profiles for all users
-        const { data: profiles, error: profileError } = await supabase
-            .from('profiles')
-            .select('id, username')
-            .in('id', userIds);
-        
-        if (profileError) {
-            console.error('[fetchAndSetAllObjects] Profile fetch error:', profileError);
+        let profiles = [];
+        try {
+            const { data: p, error: profileError } = await withTimeout(
+                supabase
+                    .from('profiles')
+                    .select('id, username')
+                    .in('id', userIds),
+                5000,
+                'fetch-top-profiles'
+            );
+            if (profileError) console.error('[fetchAndSetAllObjects] Profile fetch error:', profileError);
+            profiles = p || [];
+        } catch (e) {
+            console.warn('[fetchAndSetAllObjects] Profile fetch timed out, trying REST fallback...');
+            if (Platform.OS === 'web') {
+                try {
+                    let token = null;
+                    try {
+                        const key = `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+                        const stored = localStorage.getItem(key);
+                        if (stored) token = JSON.parse(stored).access_token;
+                    } catch (_) {}
+                    if (!token) { const { data } = await supabase.auth.getSession(); token = data?.session?.access_token; }
+
+                    if (token) {
+                        const idsStr = `(${userIds.join(',')})`;
+                        const queryParams = new URLSearchParams({
+                            select: 'id,username',
+                            id: `in.${idsStr}`
+                        });
+                        const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/profiles?${queryParams.toString()}`, {
+                            headers: {
+                                'Authorization': `Bearer ${token}`,
+                                'apikey': CONFIG.SUPABASE_ANON_KEY
+                            }
+                        });
+                        if (res.ok) {
+                            profiles = await res.json();
+                            console.log('[fetchAndSetAllObjects] Profile REST Fallback success');
+                        }
+                    }
+                } catch (restErr) { console.error('[fetchAndSetAllObjects] Profile REST Fallback failed', restErr); }
+            }
         }
         
         // Create a profile lookup map
@@ -550,9 +821,9 @@ export const fetchAndSetAllObjects = async (filterOption) => {
         
         // Combine direct and linked, preserving duplicates; tag direct with instance key
         const combinedTop = [
-            ...(directTop || []).map(o => ({ ...o, __instanceKey: `rootdir:${o.id}` })),
-            ...(linkedTop || []),
-        ]
+        ...(directTop || []).map((o) => ({ ...o, __instanceKey: `rootdir:${o.id}` })),
+        ...(linkedTop || []),
+        ];
 
         // Fetch children recursively for each object
         const objectsWithChildren = await Promise.all(
@@ -560,14 +831,14 @@ export const fetchAndSetAllObjects = async (filterOption) => {
                 const children = await fetchObjectChildren(obj.id)
                 const profile = profileMap[obj.user_id];
                 return {
-                    ...obj,
-                    owner_name: profile?.username || 'Unknown',
-                    properties: (obj.eigenschappen || []).map(prop => ({
-                        ...prop,
-                        files: prop.property_files || []
-                    })),
-                    children
-                }
+                ...obj,
+                owner_name: profile?.username || 'Unknown',
+                properties: (obj.eigenschappen || []).map((prop) => ({
+                    ...prop,
+                    files: prop.property_files || [],
+                })),
+                children,
+                };
             })
         )
         
@@ -585,14 +856,16 @@ export const handleAddObject = async (parentPath, newObjectData, userToken) => {
 
     try {
         // Ensure we have an authenticated session before attempting a write
-        const { data: sessionData } = await supabase.auth.getSession();
-        if (!sessionData?.session) {
-            // Give auth a brief moment to (re)hydrate on cold start
-            await new Promise((r) => setTimeout(r, 250));
-        }
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-            throw new Error('Niet ingelogd. Log opnieuw in en probeer nogmaals.');
+        // Wrap in timeout to prevent hanging on stale connections
+        try {
+            const { data: sessionData } = await withTimeout(supabase.auth.getSession(), 500, 'auth-check');
+            if (!sessionData?.session) {
+                // Give auth a brief moment to (re)hydrate on cold start
+                await new Promise((r) => setTimeout(r, 250));
+            }
+            await withTimeout(supabase.auth.getUser(), 500, 'user-check');
+        } catch (e) {
+            console.warn('[handleAddObject] Auth check timed out, proceeding to try insert (REST fallback will handle auth if needed)');
         }
 
         // Normalize list of names
@@ -616,7 +889,7 @@ export const handleAddObject = async (parentPath, newObjectData, userToken) => {
 
         console.log('[handleAddObject] Creating objects:', uniqueNames, 'for user:', userToken, 'parent:', parentId);
 
-    // If external groupKey provided (to join with existing links), use it; else if multiple, generate shared group_key
+        // If external groupKey provided (to join with existing links), use it; else if multiple, generate shared group_key
     const groupKey = externalGroupKey || (uniqueNames.length > 1 ? `${Date.now()}_${Math.random().toString(36).slice(2, 10)}` : null);
 
         const payload = uniqueNames.map((n) => ({
@@ -627,21 +900,50 @@ export const handleAddObject = async (parentPath, newObjectData, userToken) => {
             ...(groupKey ? { group_key: groupKey } : {})
         }));
 
-        // Wrap supabase call in a timeout to avoid indefinite hangs
-        const withTimeout = (promiseLike, ms = 12000, label = 'add-object') => new Promise((resolve, reject) => {
-            const to = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
-            Promise.resolve(promiseLike).then(
-                (val) => { clearTimeout(to); resolve(val); },
-                (err) => { clearTimeout(to); reject(err); }
-            );
-        });
-
-    let insertRes = await withTimeout(
+    let insertRes;
+    try {
+        insertRes = await withTimeout(
             supabase
                 .from('objects')
                 .insert(payload)
-        .select('id')
+                .select('id'),
+            1000,
+            'add-object'
         );
+    } catch (e) {
+        console.warn('[handleAddObject] Standard insert failed, trying REST fallback...');
+        let fallbackSuccess = false;
+        if (Platform.OS === 'web') {
+            try {
+                let token = null;
+                try {
+                    const key = `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+                    const stored = localStorage.getItem(key);
+                    if (stored) token = JSON.parse(stored).access_token;
+                } catch (_) {}
+                if (!token) { const { data } = await supabase.auth.getSession(); token = data?.session?.access_token; }
+
+                if (token) {
+                    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/objects`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`,
+                            'apikey': CONFIG.SUPABASE_ANON_KEY,
+                            'Prefer': 'return=representation'
+                        },
+                        body: JSON.stringify(payload)
+                    });
+                    if (res.ok) {
+                        const json = await res.json();
+                        insertRes = { data: json, error: null };
+                        fallbackSuccess = true;
+                    }
+                }
+            } catch (restErr) { console.error('[handleAddObject] REST Fallback failed', restErr); }
+        }
+        if (!fallbackSuccess) throw e;
+    }
 
         if (insertRes.error) {
             // Fallback if group_key column doesn't exist yet
@@ -678,22 +980,15 @@ export const addProperties = async (objectId, properties) => {
     try {
         console.log('[addProperties] Adding', properties.length, 'properties to object', objectId)
         // Ensure authenticated session to avoid RLS surprises on cold start
-        const { data: sessionData } = await supabase.auth.getSession();
-        if (!sessionData?.session) {
-            await new Promise((r) => setTimeout(r, 250));
+        try {
+            const { data: sessionData } = await withTimeout(supabase.auth.getSession(), 500, 'auth-check');
+            if (!sessionData?.session) {
+                await new Promise((r) => setTimeout(r, 250));
+            }
+            await withTimeout(supabase.auth.getUser(), 500, 'user-check');
+        } catch (e) {
+            console.warn('[addProperties] Auth check timed out, proceeding to try insert');
         }
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-            throw new Error('Niet ingelogd. Log opnieuw in en probeer nogmaals.');
-        }
-
-        const withTimeout = (promiseLike, ms = 15000, label = 'operation') => new Promise((resolve, reject) => {
-            const to = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
-            Promise.resolve(promiseLike).then(
-                (val) => { clearTimeout(to); resolve(val); },
-                (err) => { clearTimeout(to); reject(err); }
-            );
-        });
         
         const isRlsDenied = (err) => {
             if (!err) return false;
@@ -710,39 +1005,152 @@ export const addProperties = async (objectId, properties) => {
             console.log('[addProperties] Processing property:', prop.name, 'files:', prop.files?.length || 0)
             
             // Insert property
-            let { data: propertyData, error: propertyError } = await withTimeout(
-                supabase
-                .from('eigenschappen')
-                .insert([
-                    {
-                        object_id: objectId,
-                        name: prop.name.trim(),
-                        waarde: prop.waarde,
-                        eenheid: prop.unit || '',
-                        formule_id: prop.Formule_id || null
-                    }
-                ])
-                .select()
-                .single(),
-                15000,
-                'add-property'
-            )
+            let propertyData, propertyError;
+            try {
+                ({ data: propertyData, error: propertyError } = await withTimeout(
+                    supabase
+                    .from('eigenschappen')
+                    .insert([
+                        {
+                            object_id: objectId,
+                            name: prop.name.trim(),
+                            waarde: prop.waarde,
+                            eenheid: prop.unit || '',
+                            formule_id: prop.Formule_id || null
+                        }
+                    ])
+                    .select()
+                    .single(),
+                    1000,
+                    'add-property'
+                ));
+            } catch (e) {
+                console.warn('[addProperties] Standard insert failed, trying REST fallback...');
+                let fallbackSuccess = false;
+                let rest403 = false;
+
+                if (Platform.OS === 'web') {
+                    try {
+                        let token = null;
+                        try {
+                            const key = `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+                            const stored = localStorage.getItem(key);
+                            if (stored) token = JSON.parse(stored).access_token;
+                        } catch (_) {}
+                        if (!token) { const { data } = await supabase.auth.getSession(); token = data?.session?.access_token; }
+
+                        if (token) {
+                            const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/eigenschappen`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': `Bearer ${token}`,
+                                    'apikey': CONFIG.SUPABASE_ANON_KEY,
+                                    'Prefer': 'return=representation',
+                                    'Accept': 'application/vnd.pgrst.object+json'
+                                },
+                                body: JSON.stringify({
+                                    object_id: objectId,
+                                    name: prop.name.trim(),
+                                    waarde: prop.waarde,
+                                    eenheid: prop.unit || '',
+                                    formule_id: prop.Formule_id || null
+                                })
+                            });
+                            if (res.ok) {
+                                const json = await res.json();
+                                propertyData = json;
+                                propertyError = null;
+                                fallbackSuccess = true;
+                            } else if (res.status === 403) {
+                                rest403 = true;
+                                console.warn('[addProperties] REST Fallback returned 403 (RLS)');
+                            }
+                        }
+                    } catch (restErr) { console.error('[addProperties] REST Fallback failed', restErr); }
+                }
+                
+                if (fallbackSuccess) {
+                    // success
+                } else if (rest403) {
+                    // Mock RLS error to trigger RPC fallback
+                    propertyError = { message: 'row level security policy violated', code: '42501' };
+                } else {
+                    throw e;
+                }
+            }
 
             // Fallback via RPC when RLS prevents inserting into someone else's object
             if (propertyError && isRlsDenied(propertyError)) {
                 console.warn('[addProperties] RLS prevented insert. Trying admin RPC fallback...');
-                const { data: rpcId, error: rpcErr } = await withTimeout(
-                    supabase.rpc('admin_insert_property', {
-                        p_object_id: objectId,
-                        p_name: prop.name.trim(),
-                        p_waarde: prop.waarde,
-                        p_eenheid: prop.unit || '',
-                        p_formule_id: prop.Formule_id != null ? prop.Formule_id : null,
-                    }),
-                    15000,
-                    'admin_insert_property'
-                )
-                if (rpcErr) {
+                
+                let rpcId = null;
+                let rpcErr = null;
+
+                try {
+                    // Try standard RPC with short timeout
+                    const { data, error } = await withTimeout(
+                        supabase.rpc('admin_insert_property', {
+                            p_object_id: objectId,
+                            p_name: prop.name.trim(),
+                            p_waarde: prop.waarde,
+                            p_eenheid: prop.unit || '',
+                            p_formule_id: prop.Formule_id != null ? prop.Formule_id : null,
+                        }),
+                        1000, // Short timeout to fail fast
+                        'admin_insert_property'
+                    );
+                    if (error) throw error;
+                    rpcId = data;
+                } catch (e) {
+                    console.warn('[addProperties] Standard RPC failed/timed out, trying REST fallback...', e.message);
+                    
+                    // REST Fallback for RPC
+                    let fallbackSuccess = false;
+                    if (Platform.OS === 'web') {
+                        try {
+                            let token = null;
+                            try {
+                                const key = `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+                                const stored = localStorage.getItem(key);
+                                if (stored) token = JSON.parse(stored).access_token;
+                            } catch (_) {}
+                            if (!token) { const { data } = await supabase.auth.getSession(); token = data?.session?.access_token; }
+
+                            if (token) {
+                                const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/rpc/admin_insert_property`, {
+                                    method: 'POST',
+                                    headers: {
+                                        'Content-Type': 'application/json',
+                                        'Authorization': `Bearer ${token}`,
+                                        'apikey': CONFIG.SUPABASE_ANON_KEY
+                                    },
+                                    body: JSON.stringify({
+                                        p_object_id: objectId,
+                                        p_name: prop.name.trim(),
+                                        p_waarde: prop.waarde,
+                                        p_eenheid: prop.unit || '',
+                                        p_formule_id: prop.Formule_id != null ? prop.Formule_id : null,
+                                    })
+                                });
+                                if (res.ok) {
+                                    const json = await res.json();
+                                    rpcId = json;
+                                    fallbackSuccess = true;
+                                    console.log('[addProperties] RPC REST Fallback success');
+                                } else {
+                                    console.error('[addProperties] RPC REST Fallback failed status:', res.status);
+                                }
+                            }
+                        } catch (restErr) { console.error('[addProperties] RPC REST Fallback exception', restErr); }
+                    }
+                    
+                    if (!fallbackSuccess) {
+                        rpcErr = e;
+                    }
+                }
+
+                if (rpcErr && !rpcId) {
                     console.error('[addProperties] RPC fallback failed:', rpcErr);
                     throw rpcErr;
                 }
@@ -847,16 +1255,26 @@ const uploadPropertyFiles = async (propertyId, files) => {
             console.log('[uploadPropertyFiles] Uploading to storage:', filePath)
             
             // Upload to Supabase Storage
-            const { data: uploadData, error: uploadError } = await withTimeout(
-                supabase.storage
-                .from('property-files')
-                .upload(filePath, fileToUpload, {
-                    cacheControl: '3600',
-                    upsert: false
-                }),
-                30000,
-                'storage-upload'
-            )
+            let uploadData, uploadError;
+            try {
+                ({ data: uploadData, error: uploadError } = await withTimeout(
+                    supabase.storage
+                    .from('property-files')
+                    .upload(filePath, fileToUpload, {
+                        cacheControl: '3600',
+                        upsert: false
+                    }),
+                    30000,
+                    'storage-upload'
+                ));
+            } catch (e) {
+                // Storage upload fallback? 
+                // Storage REST API is complex (multipart/form-data), usually standard client is robust enough or we can't easily replicate it here without FormData polyfills.
+                // But if it's a timeout, we should probably just fail or try again.
+                // For now, let's assume storage upload is less likely to be blocked by RLS in the same way (usually public/authenticated buckets).
+                // If RLS blocks it, it returns 403 immediately.
+                throw e;
+            }
             
             if (uploadError) {
                 console.error('[uploadPropertyFiles] Storage upload error:', uploadError)
@@ -867,37 +1285,139 @@ const uploadPropertyFiles = async (propertyId, files) => {
             
             // Save file reference to database
             console.log('[uploadPropertyFiles] Saving file reference to database')
-            const { error: dbError } = await withTimeout(
-                supabase
-                .from('property_files')
-                .insert([
-                    {
-                        property_id: propertyId,
-                        file_name: file.name,
-                        file_path: uploadData.path,
-                        file_type: file.type || file.mimeType,
-                        file_size: file.size
-                    }
-                ]),
-                15000,
-                'property_files-insert'
-            )
+            
+            let dbError;
+            try {
+                const { error } = await withTimeout(
+                    supabase
+                    .from('property_files')
+                    .insert([
+                        {
+                            property_id: propertyId,
+                            file_name: file.name,
+                            file_path: uploadData.path,
+                            file_type: file.type || file.mimeType,
+                            file_size: file.size
+                        }
+                    ]),
+                    15000,
+                    'property_files-insert'
+                );
+                dbError = error;
+            } catch (e) {
+                console.warn('[uploadPropertyFiles] Standard insert failed, trying REST fallback...');
+                let fallbackSuccess = false;
+                let rest403 = false;
+
+                if (Platform.OS === 'web') {
+                    try {
+                        let token = null;
+                        try {
+                            const key = `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+                            const stored = localStorage.getItem(key);
+                            if (stored) token = JSON.parse(stored).access_token;
+                        } catch (_) {}
+                        if (!token) { const { data } = await supabase.auth.getSession(); token = data?.session?.access_token; }
+
+                        if (token) {
+                            const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/property_files`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': `Bearer ${token}`,
+                                    'apikey': CONFIG.SUPABASE_ANON_KEY
+                                },
+                                body: JSON.stringify({
+                                    property_id: propertyId,
+                                    file_name: file.name,
+                                    file_path: uploadData.path,
+                                    file_type: file.type || file.mimeType,
+                                    file_size: file.size
+                                })
+                            });
+                            if (res.ok) {
+                                fallbackSuccess = true;
+                            } else if (res.status === 403) {
+                                rest403 = true;
+                            }
+                        }
+                    } catch (restErr) { console.error('[uploadPropertyFiles] REST Fallback failed', restErr); }
+                }
+
+                if (fallbackSuccess) {
+                    dbError = null;
+                } else if (rest403) {
+                    dbError = { message: 'row level security policy violated', code: '42501' };
+                } else {
+                    throw e;
+                }
+            }
 
             if (dbError) {
                 const msg = (dbError.message || '').toLowerCase();
                 if (msg.includes('row level security') || msg.includes('permission denied') || msg.includes('violates row-level security')) {
                     console.warn('[uploadPropertyFiles] RLS prevented property_files insert. Trying admin RPC fallback...')
-                    const { error: rpcErr } = await withTimeout(
-                        supabase.rpc('admin_insert_property_file', {
-                            p_property_id: propertyId,
-                            p_file_name: file.name,
-                            p_file_path: uploadData.path,
-                            p_file_type: file.type || file.mimeType,
-                            p_file_size: file.size
-                        }),
-                        15000,
-                        'admin_insert_property_file'
-                    )
+                    
+                    let rpcErr = null;
+                    let fallbackSuccess = false;
+
+                    try {
+                        const { error } = await withTimeout(
+                            supabase.rpc('admin_insert_property_file', {
+                                p_property_id: propertyId,
+                                p_file_name: file.name,
+                                p_file_path: uploadData.path,
+                                p_file_type: file.type || file.mimeType,
+                                p_file_size: file.size
+                            }),
+                            1000, // Short timeout
+                            'admin_insert_property_file'
+                        );
+                        if (error) throw error;
+                    } catch (e) {
+                        console.warn('[uploadPropertyFiles] Standard RPC failed/timed out, trying REST fallback...', e.message);
+                        
+                        if (Platform.OS === 'web') {
+                            try {
+                                let token = null;
+                                try {
+                                    const key = `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+                                    const stored = localStorage.getItem(key);
+                                    if (stored) token = JSON.parse(stored).access_token;
+                                } catch (_) {}
+                                if (!token) { const { data } = await supabase.auth.getSession(); token = data?.session?.access_token; }
+
+                                if (token) {
+                                    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/rpc/admin_insert_property_file`, {
+                                        method: 'POST',
+                                        headers: {
+                                            'Content-Type': 'application/json',
+                                            'Authorization': `Bearer ${token}`,
+                                            'apikey': CONFIG.SUPABASE_ANON_KEY
+                                        },
+                                        body: JSON.stringify({
+                                            p_property_id: propertyId,
+                                            p_file_name: file.name,
+                                            p_file_path: uploadData.path,
+                                            p_file_type: file.type || file.mimeType,
+                                            p_file_size: file.size
+                                        })
+                                    });
+                                    if (res.ok) {
+                                        fallbackSuccess = true;
+                                        console.log('[uploadPropertyFiles] RPC REST Fallback success');
+                                    } else {
+                                        console.error('[uploadPropertyFiles] RPC REST Fallback failed status:', res.status);
+                                    }
+                                }
+                            } catch (restErr) { console.error('[uploadPropertyFiles] RPC REST Fallback exception', restErr); }
+                        }
+                        
+                        if (!fallbackSuccess) {
+                            rpcErr = e;
+                        }
+                    }
+
                     if (rpcErr) {
                         console.error('[uploadPropertyFiles] RPC fallback failed:', rpcErr)
                         throw rpcErr
@@ -922,116 +1442,303 @@ const uploadPropertyFiles = async (propertyId, files) => {
 }
 
 export const updateProperty = async (propertyId, { name, waarde, Formule_id, eenheid }) => {
-    try {
-        console.log('[updateProperty] Updating property ID:', propertyId);
-        console.log('[updateProperty] Data:', { name, waarde, Formule_id, eenheid });
-        
-        // Check if user is authenticated
-        const { data: { user } } = await supabase.auth.getUser();
-        console.log('[updateProperty] Current user:', user?.id || 'Not authenticated');
-        
-        // First, let's check if the property exists and get its current data
-        const { data: existingProperty, error: fetchError } = await supabase
-            .from('eigenschappen')
-            .select('*, objects!inner(user_id)')
-            .eq('id', propertyId)
-            .single();
-        
-        if (fetchError) {
-            console.error('[updateProperty] Error fetching existing property:', fetchError);
-            throw new Error('Property not found or access denied');
-        }
-        
-        console.log('[updateProperty] Existing property:', existingProperty);
-        const propertyOwnerId = existingProperty.objects?.user_id || null;
-        const isCurrentUserOwner = propertyOwnerId && user?.id ? propertyOwnerId === user.id : false;
-        console.log('[updateProperty] Property owner (info):', propertyOwnerId);
-        console.log('[updateProperty] Current user is property owner:', isCurrentUserOwner);
+    console.log('===== [updateProperty] START =====');
+    console.log('[updateProperty] Payload:', propertyId, { name, waarde, eenheid, Formule_id });
 
-        const runAdminUpdate = async () => {
-            console.log('[updateProperty] Using admin_update_property RPC');
-            const { error: rpcErr } = await supabase.rpc('admin_update_property', {
-                p_property_id: Number(propertyId),
-                p_name: name,
-                p_waarde: waarde,
-                p_eenheid: eenheid || '',
-                p_formule_id: Formule_id != null ? Number(Formule_id) : null
-            });
-            if (rpcErr) {
-                console.error('[updateProperty] RPC fallback failed:', rpcErr);
-                throw rpcErr;
+    // Helper for timeouts
+    const withTimeout = (promise, ms = 5000, label = 'operation') => new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
+        promise.then(
+            (res) => { clearTimeout(timeoutId); resolve(res); },
+            (err) => { clearTimeout(timeoutId); reject(err); }
+        );
+    });
+
+    try {
+        // 1. Check session (with short timeout to avoid hanging on tab switch/backgrounding)
+        try {
+            const { data: { session }, error: sessionError } = await withTimeout(
+                supabase.auth.getSession(),
+                500,
+                'auth-check'
+            );
+            if (sessionError || !session) {
+                console.warn('[updateProperty] No active session found (or check failed), update might fail.');
             }
-            console.log('[updateProperty] RPC update succeeded');
+        } catch (e) {
+            console.warn('[updateProperty] Session check timed out or failed, proceeding anyway:', e.message);
+        }
+
+        const normalized = {
+            name,
+            waarde,
+            formule_id: Formule_id ?? null,
+            eenheid: eenheid || '',
+            updated_at: new Date().toISOString(),
         };
 
-        if (!isCurrentUserOwner && propertyOwnerId) {
-            await runAdminUpdate();
-            Alert.alert('Success', 'Property updated successfully!');
-            return true;
-        }
-        
-        let { data, error } = await supabase
-            .from('eigenschappen')
-            .update({
-                name,
-                waarde,
-                eenheid: eenheid || '',
-                formule_id: Formule_id || null,
-                updated_at: new Date().toISOString()
-            })
-            .eq('id', propertyId)
-            .select()
-        
-        if (error) {
-            const msg = (error.message || '').toLowerCase();
-            if (msg.includes('row level security') || msg.includes('permission denied') || msg.includes('violates row-level security')) {
-                console.warn('[updateProperty] RLS prevented update. Trying admin RPC fallback...');
-                await runAdminUpdate();
-            } else {
-                console.error('[updateProperty] Database error:', error);
-                throw error;
+        console.log('[updateProperty] Normalized data:', normalized);
+
+        // 3. Perform update with retry logic
+        // We try the standard client ONCE with a short timeout. 
+        // If it hangs (due to tab sleep), we fail fast and switch to REST.
+        let attempts = 0;
+        const maxAttempts = 1; 
+        let lastError = null;
+
+        while (attempts < maxAttempts) {
+            attempts++;
+            try {
+                console.log(`[updateProperty] Attempt ${attempts}/${maxAttempts} (Standard Client)...`);
+                const { data, error } = await withTimeout(
+                    supabase
+                        .from('eigenschappen')
+                        .update(normalized)
+                        .eq('id', propertyId)
+                        .select()
+                        .single(),
+                    500, // Ultra-short 500ms timeout to fail fast if connection is stale
+                    `db-update-attempt-${attempts}`
+                );
+
+                if (error) throw error;
+
+                console.log('[updateProperty] Updated row:', data);
+                console.log('===== [updateProperty] END (success) =====');
+                return true;
+
+            } catch (err) {
+                console.warn(`[updateProperty] Attempt ${attempts} failed:`, err.message || err);
+                lastError = err;
+                if (attempts < maxAttempts) {
+                    // Wait 1s before retry to allow network stack to wake up
+                    await new Promise(r => setTimeout(r, 1000));
+                }
             }
         }
+
+        console.error('[updateProperty] All attempts failed. Last error:', lastError);
         
-        console.log('[updateProperty] Property updated successfully:', data);
-        Alert.alert('Success', 'Property updated successfully!')
-        return true
-    } catch (error) {
-        console.error('[updateProperty] Error updating property:', error);
-        Alert.alert('Error', error.message || 'Failed to update property')
-        return false
+        // Fallback: Try Raw REST API (bypassing Supabase Client)
+        console.log('[updateProperty] Attempting Raw REST Fallback...');
+        try {
+            // Try to get token from storage directly if possible (Web only hack)
+            let token = null;
+            if (Platform.OS === 'web') {
+                try {
+                    const key = `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+                    const stored = localStorage.getItem(key);
+                    if (stored) {
+                        const parsed = JSON.parse(stored);
+                        token = parsed.access_token;
+                    }
+                } catch (e) { console.warn('Could not read local token:', e); }
+            }
+            
+            // If no local token, try one last fast getSession
+            if (!token) {
+                const { data } = await supabase.auth.getSession();
+                token = data?.session?.access_token;
+            }
+
+            if (token) {
+                const url = `${CONFIG.SUPABASE_URL}/rest/v1/eigenschappen?id=eq.${propertyId}`;
+                const res = await fetch(url, {
+                    method: 'PATCH',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`,
+                        'apikey': CONFIG.SUPABASE_ANON_KEY,
+                        'Prefer': 'return=representation'
+                    },
+                    body: JSON.stringify(normalized)
+                });
+                
+                if (res.ok) {
+                    const json = await res.json();
+                    console.log('[updateProperty] Raw REST Fallback SUCCESS:', json);
+                    console.log('===== [updateProperty] END (success-fallback) =====');
+                    return true;
+                } else {
+                    console.error('[updateProperty] Raw REST Fallback Failed:', res.status, res.statusText);
+                }
+            } else {
+                console.warn('[updateProperty] No token available for Raw REST Fallback');
+            }
+        } catch (fallbackErr) {
+            console.error('[updateProperty] Raw REST Fallback Exception:', fallbackErr);
+        }
+
+        console.log('===== [updateProperty] END (error) =====');
+        return false;
+
+    } catch (err) {
+        console.error('[updateProperty] FAILED (exception):', err);
+        console.log('===== [updateProperty] END (exception) =====');
+        return false;
     }
-}
+};
 
 export const deleteProperty = async (propertyId) => {
+    console.log('[deleteProperty] Starting delete for property ID:', propertyId);
+    
+    // Helper for timeouts
+    const withTimeout = (promise, ms = 5000, label = 'operation') => new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
+        promise.then(
+            (res) => { clearTimeout(timeoutId); resolve(res); },
+            (err) => { clearTimeout(timeoutId); reject(err); }
+        );
+    });
+
     try {
-        const { error } = await supabase
-            .from('eigenschappen')
-            .delete()
-            .eq('id', propertyId)
-        
-        if (error) throw error
-        
-        Alert.alert('Success', 'Property deleted successfully!')
-        return true
+        // 1. Check session (fail fast if auth is gone)
+        try {
+            const { data: { session }, error: sessionError } = await withTimeout(
+                supabase.auth.getSession(),
+                500,
+                'auth-check'
+            );
+            if (sessionError || !session) {
+                console.warn('[deleteProperty] No active session found, delete might fail.');
+            }
+        } catch (e) {
+            console.warn('[deleteProperty] Session check timed out, proceeding anyway.');
+        }
+
+        // 2. Attempt standard delete with timeout
+        let attempts = 0;
+        const maxAttempts = 1;
+        let lastError = null;
+
+        while (attempts < maxAttempts) {
+            attempts++;
+            try {
+                console.log(`[deleteProperty] Attempt ${attempts}/${maxAttempts} (Standard Client)...`);
+                const { error } = await withTimeout(
+                    supabase
+                        .from('eigenschappen')
+                        .delete()
+                        .eq('id', propertyId),
+                    1000, // Short timeout for fail-fast
+                    `db-delete-attempt-${attempts}`
+                );
+
+                if (error) throw error;
+
+                console.log('[deleteProperty] Delete successful (Standard Client)');
+                Alert.alert('Success', 'Eigenschap verwijderd!');
+                return true;
+
+            } catch (err) {
+                console.warn(`[deleteProperty] Attempt ${attempts} failed:`, err.message || err);
+                lastError = err;
+                if (attempts < maxAttempts) {
+                    await new Promise(r => setTimeout(r, 500));
+                }
+            }
+        }
+
+        // 3. Fallback: REST API
+        console.log('[deleteProperty] Attempting Raw REST Fallback...');
+        try {
+            let token = null;
+            if (Platform.OS === 'web') {
+                try {
+                    const key = `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+                    const stored = localStorage.getItem(key);
+                    if (stored) {
+                        const parsed = JSON.parse(stored);
+                        token = parsed.access_token;
+                    }
+                } catch (e) { console.warn('Could not read local token:', e); }
+            }
+            
+            if (!token) {
+                const { data } = await supabase.auth.getSession();
+                token = data?.session?.access_token;
+            }
+
+            if (token) {
+                const url = `${CONFIG.SUPABASE_URL}/rest/v1/eigenschappen?id=eq.${propertyId}`;
+                const res = await fetch(url, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'apikey': CONFIG.SUPABASE_ANON_KEY,
+                        'Prefer': 'return=representation'
+                    }
+                });
+                
+                if (res.ok) {
+                    console.log('[deleteProperty] Raw REST Fallback SUCCESS');
+                    Alert.alert('Success', 'Eigenschap verwijderd!');
+                    return true;
+                } else {
+                    console.error('[deleteProperty] Raw REST Fallback Failed:', res.status, res.statusText);
+                }
+            }
+        } catch (fallbackErr) {
+            console.error('[deleteProperty] Raw REST Fallback Exception:', fallbackErr);
+        }
+
+        // If we get here, everything failed
+        console.error('[deleteProperty] All attempts failed. Last error:', lastError);
+        Alert.alert('Error', lastError?.message || 'Kon eigenschap niet verwijderen.');
+        return false;
+
     } catch (error) {
-        console.error('Error deleting property:', error)
-        Alert.alert('Error', error.message)
-        return false
+        console.error('[deleteProperty] Unexpected error:', error);
+        Alert.alert('Error', error.message);
+        return false;
     }
 }
 
 // Formulas functions
 export const fetchFormules = async () => {
     try {
-        const { data, error } = await supabase
-            .from('formules')
-            .select('*')
-            .order('name')
+        const { data, error } = await withTimeout(
+            supabase
+                .from('formules')
+                .select('*')
+                .order('name'),
+            500,
+            'fetch-formules-all'
+        );
         
         if (error) throw error
         return data || []
     } catch (error) {
+        console.warn('[fetchFormules] Standard fetch failed/timed out, trying REST fallback...');
+        if (Platform.OS === 'web') {
+            try {
+                let token = null;
+                try {
+                    const key = `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+                    const stored = localStorage.getItem(key);
+                    if (stored) token = JSON.parse(stored).access_token;
+                } catch (_) {}
+                
+                if (!token) {
+                     const { data } = await supabase.auth.getSession();
+                     token = data?.session?.access_token;
+                }
+
+                if (token) {
+                    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/formules?select=*&order=name.asc`, {
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'apikey': CONFIG.SUPABASE_ANON_KEY
+                        }
+                    });
+                    if (res.ok) {
+                        const json = await res.json();
+                        console.log('[fetchFormules] REST Fallback success');
+                        return json;
+                    }
+                }
+            } catch (e) { console.error('[fetchFormules] REST Fallback failed', e); }
+        }
         console.error('Error fetching formulas:', error)
         return []
     }
@@ -1040,13 +1747,47 @@ export const fetchFormules = async () => {
 // Safer structured variant used by picker with error propagation
 export const fetchFormulesSafe = async () => {
     try {
-        const { data, error } = await supabase
-            .from('formules')
-            .select('id, name, formule, updated_at')
-            .order('name');
+        const { data, error } = await withTimeout(
+            supabase
+                .from('formules')
+                .select('id, name, formule, updated_at')
+                .order('name'),
+            500,
+            'fetch-formules'
+        );
         if (error) return { success: false, error: error.message || 'Onbekende fout', data: [] };
         return { success: true, data: data || [] };
     } catch (e) {
+        console.warn('[fetchFormulesSafe] Standard fetch failed/timed out, trying REST fallback...');
+        if (Platform.OS === 'web') {
+            try {
+                let token = null;
+                try {
+                    const key = `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+                    const stored = localStorage.getItem(key);
+                    if (stored) token = JSON.parse(stored).access_token;
+                } catch (_) {}
+                
+                if (!token) {
+                     const { data } = await supabase.auth.getSession();
+                     token = data?.session?.access_token;
+                }
+
+                if (token) {
+                    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/formules?select=id,name,formule,updated_at&order=name.asc`, {
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'apikey': CONFIG.SUPABASE_ANON_KEY
+                        }
+                    });
+                    if (res.ok) {
+                        const json = await res.json();
+                        console.log('[fetchFormulesSafe] REST Fallback success');
+                        return { success: true, data: json };
+                    }
+                }
+            } catch (restErr) { console.error('[fetchFormulesSafe] REST Fallback failed', restErr); }
+        }
         return { success: false, error: e.message || 'Onbekende fout', data: [] };
     }
 };
@@ -1058,22 +1799,30 @@ export const fetchFormuleByExpression = async (expression) => {
     const normalizedLC = normalized.toLowerCase();
     try {
         // Try exact equality first
-        let { data, error } = await supabase
-            .from('formules')
-            .select('id, name, formule')
-            .eq('formule', normalized)
-            .limit(5);
+        let { data, error } = await withTimeout(
+            supabase
+                .from('formules')
+                .select('id, name, formule')
+                .eq('formule', normalized)
+                .limit(5),
+            5000,
+            'fetch-formule-expr-exact'
+        );
         if (error) {
             console.warn('[fetchFormuleByExpression] eq lookup failed, falling back to client filter:', error.message);
         }
         let candidate = (data || []).find(f => String(f.formule).replace(/[x×]/g,'*').trim().toLowerCase() === normalizedLC);
         if (candidate) return candidate;
         // Fallback: ilike/like for case-insensitive partials, then client-side exact (case-insensitive)
-        const { data: likeData, error: likeErr } = await supabase
-            .from('formules')
-            .select('id, name, formule')
-            .ilike('formule', `%${normalized}%`)
-            .limit(20);
+        const { data: likeData, error: likeErr } = await withTimeout(
+            supabase
+                .from('formules')
+                .select('id, name, formule')
+                .ilike('formule', `%${normalized}%`)
+                .limit(20),
+            8000,
+            'fetch-formule-expr-fallback'
+        );
         if (likeErr) {
             console.warn('[fetchFormuleByExpression] ilike fallback failed:', likeErr.message);
             return null;
@@ -1095,10 +1844,49 @@ export const createFormule = async (name, formule) => {
         console.log('[createFormule] Current user:', user?.id || 'Not authenticated');
 
         const normalizedExpr = String(formule).replace(/[x×]/g, '*').trim();
-        const attemptInsert = async (nm) => supabase
-            .from('formules')
-            .insert([{ name: nm, formule: normalizedExpr }])
-            .select();
+        const attemptInsert = async (nm) => {
+            try {
+                return await withTimeout(
+                    supabase
+                        .from('formules')
+                        .insert([{ name: nm, formule: normalizedExpr }])
+                        .select(),
+                    1000,
+                    'create-formule'
+                );
+            } catch (e) {
+                console.warn('[createFormule] Standard insert failed, trying REST fallback...');
+                if (Platform.OS === 'web') {
+                    try {
+                        let token = null;
+                        try {
+                            const key = `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+                            const stored = localStorage.getItem(key);
+                            if (stored) token = JSON.parse(stored).access_token;
+                        } catch (_) {}
+                        if (!token) { const { data } = await supabase.auth.getSession(); token = data?.session?.access_token; }
+
+                        if (token) {
+                            const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/formules`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': `Bearer ${token}`,
+                                    'apikey': CONFIG.SUPABASE_ANON_KEY,
+                                    'Prefer': 'return=representation'
+                                },
+                                body: JSON.stringify({ name: nm, formule: normalizedExpr })
+                            });
+                            if (res.ok) {
+                                const json = await res.json();
+                                return { data: json, error: null };
+                            }
+                        }
+                    } catch (restErr) { console.error('[createFormule] REST Fallback failed', restErr); }
+                }
+                throw e;
+            }
+        };
 
         // Try original name; if unique constraint blocks, retry with invisible suffix to allow same visible names
         let data, error;
@@ -1149,11 +1937,50 @@ export const updateFormule = async (id, name, formule) => {
         console.log('[updateFormule] Updating formula ID:', id, 'with name:', name, 'formula:', formule);
 
         const normalizedExpr = String(formule).replace(/[x×]/g, '*').trim();
-        const attemptUpdate = async (nm) => supabase
-            .from('formules')
-            .update({ name: nm, formule: normalizedExpr, updated_at: new Date().toISOString() })
-            .eq('id', id)
-            .select();
+        const attemptUpdate = async (nm) => {
+            try {
+                return await withTimeout(
+                    supabase
+                        .from('formules')
+                        .update({ name: nm, formule: normalizedExpr, updated_at: new Date().toISOString() })
+                        .eq('id', id)
+                        .select(),
+                    1000,
+                    'update-formule'
+                );
+            } catch (e) {
+                console.warn('[updateFormule] Standard update failed, trying REST fallback...');
+                if (Platform.OS === 'web') {
+                    try {
+                        let token = null;
+                        try {
+                            const key = `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+                            const stored = localStorage.getItem(key);
+                            if (stored) token = JSON.parse(stored).access_token;
+                        } catch (_) {}
+                        if (!token) { const { data } = await supabase.auth.getSession(); token = data?.session?.access_token; }
+
+                        if (token) {
+                            const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/formules?id=eq.${id}`, {
+                                method: 'PATCH',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': `Bearer ${token}`,
+                                    'apikey': CONFIG.SUPABASE_ANON_KEY,
+                                    'Prefer': 'return=representation'
+                                },
+                                body: JSON.stringify({ name: nm, formule: normalizedExpr, updated_at: new Date().toISOString() })
+                            });
+                            if (res.ok) {
+                                const json = await res.json();
+                                return { data: json, error: null };
+                            }
+                        }
+                    } catch (restErr) { console.error('[updateFormule] REST Fallback failed', restErr); }
+                }
+                throw e;
+            }
+        };
 
         let { data, error } = await attemptUpdate(name);
         if (error) {
@@ -1206,21 +2033,112 @@ export const updateFormule = async (id, name, formule) => {
 };
 
 export const deleteFormule = async (id) => {
+    console.log('[deleteFormule] Starting delete for ID:', id);
+
+    // Helper for timeouts
+    const withTimeout = (promise, ms = 5000, label = 'operation') => new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
+        promise.then(
+            (res) => { clearTimeout(timeoutId); resolve(res); },
+            (err) => { clearTimeout(timeoutId); reject(err); }
+        );
+    });
+
     try {
-        console.log('[deleteFormule] Starting delete for ID:', id)
-        
-        const { error } = await supabase
-            .from('formules')
-            .delete()
-            .eq('id', id)
-        
-        if (error) throw error
-        
-        console.log('[deleteFormule] Delete successful')
-        return { success: true }
+        // 1. Check session
+        try {
+            const { data: { session }, error: sessionError } = await withTimeout(
+                supabase.auth.getSession(),
+                500,
+                'auth-check'
+            );
+            if (sessionError || !session) {
+                console.warn('[deleteFormule] No active session found, delete might fail.');
+            }
+        } catch (e) {
+            console.warn('[deleteFormule] Session check timed out, proceeding anyway.');
+        }
+
+        // 2. Attempt standard delete
+        let attempts = 0;
+        const maxAttempts = 1;
+        let lastError = null;
+
+        while (attempts < maxAttempts) {
+            attempts++;
+            try {
+                console.log(`[deleteFormule] Attempt ${attempts}/${maxAttempts} (Standard Client)...`);
+                const { error } = await withTimeout(
+                    supabase
+                        .from('formules')
+                        .delete()
+                        .eq('id', id),
+                    1000,
+                    `db-delete-formule-attempt-${attempts}`
+                );
+
+                if (error) throw error;
+
+                console.log('[deleteFormule] Delete successful (Standard Client)');
+                return { success: true };
+
+            } catch (err) {
+                console.warn(`[deleteFormule] Attempt ${attempts} failed:`, err.message || err);
+                lastError = err;
+                if (attempts < maxAttempts) {
+                    await new Promise(r => setTimeout(r, 500));
+                }
+            }
+        }
+
+        // 3. Fallback: REST API
+        console.log('[deleteFormule] Attempting Raw REST Fallback...');
+        try {
+            let token = null;
+            if (Platform.OS === 'web') {
+                try {
+                    const key = `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+                    const stored = localStorage.getItem(key);
+                    if (stored) {
+                        const parsed = JSON.parse(stored);
+                        token = parsed.access_token;
+                    }
+                } catch (e) { console.warn('Could not read local token:', e); }
+            }
+            
+            if (!token) {
+                const { data } = await supabase.auth.getSession();
+                token = data?.session?.access_token;
+            }
+
+            if (token) {
+                const url = `${CONFIG.SUPABASE_URL}/rest/v1/formules?id=eq.${id}`;
+                const res = await fetch(url, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'apikey': CONFIG.SUPABASE_ANON_KEY,
+                        'Prefer': 'return=representation'
+                    }
+                });
+                
+                if (res.ok) {
+                    console.log('[deleteFormule] Raw REST Fallback SUCCESS');
+                    return { success: true };
+                } else {
+                    console.error('[deleteFormule] Raw REST Fallback Failed:', res.status, res.statusText);
+                }
+            }
+        } catch (fallbackErr) {
+            console.error('[deleteFormule] Raw REST Fallback Exception:', fallbackErr);
+        }
+
+        console.error('[deleteFormule] All attempts failed. Last error:', lastError);
+        return { success: false, message: lastError?.message || 'Kon formule niet verwijderen.' };
+
     } catch (error) {
-        console.error('Error deleting formula:', error)
-        return { success: false, message: error.message }
+        console.error('[deleteFormule] Unexpected error:', error);
+        return { success: false, message: error.message };
     }
 }
 
@@ -1407,9 +2325,9 @@ export const fetchMaterials = async () => {
         }, {});
 
         return (materials || []).map(m => {
-            const allocated = allocatedByMaterial[m.id] || 0;
-            const available = Number(m.total_quantity || 0) - allocated;
-            return { ...m, allocated, available };
+        const allocated = allocatedByMaterial[m.id] || 0;
+        const available = Number(m.total_quantity || 0) - allocated;
+        return { ...m, allocated, available };
         });
     } catch (e) {
         console.error('[fetchMaterials] error', e);
@@ -1483,28 +2401,199 @@ export const linkObjects = async ({ parentId, childIds, groupKey = null }) => {
             console.warn('[linkObjects] missing children');
             return { success: false, message: 'Missing children' };
         }
-        // Allow parentId to be null for root-level links
-        const rows = [...new Set(childIds)]
-            .filter((id) => id && (parentId == null ? true : id !== parentId))
-            .map((id) => ({ parent_id: parentId ?? null, child_id: id, ...(groupKey ? { group_key: groupKey } : {}) }));
+                // Allow parentId to be null for root-level links
+        const rows = Array.from(new Set(childIds))
+        .filter((id) => id && (parentId == null ? true : id !== parentId))
+        .map((id) => ({
+            parent_id: parentId ?? null,
+            child_id: id,
+            ...(groupKey ? { group_key: groupKey } : {}),
+        }));
+
         if (rows.length === 0) {
             console.warn('[linkObjects] nothing to link after filtering');
             return { success: true };
         }
 
-        // Upsert to avoid duplicate errors if link already exists
-        let { data, error } = await supabase
-            .from('object_links')
-            .upsert(rows, { onConflict: 'parent_id,child_id', ignoreDuplicates: true });
-        // If group_key column missing, retry without it
+        // Helper for timeouts
+        const withTimeout = (promise, ms = 5000, label = 'operation') => new Promise((resolve, reject) => {
+            const timeoutId = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms);
+            promise.then(
+                (res) => { clearTimeout(timeoutId); resolve(res); },
+                (err) => { clearTimeout(timeoutId); reject(err); }
+            );
+        });
+
+        let data, error;
+
+        try {
+            // Upsert to avoid duplicate errors if link already exists
+            const res = await withTimeout(
+                supabase
+                    .from('object_links')
+                    .upsert(rows, { onConflict: 'parent_id,child_id', ignoreDuplicates: true })
+                    .select(),
+                1000,
+                'link-objects'
+            );
+            data = res.data;
+            error = res.error;
+        } catch (e) {
+            console.warn('[linkObjects] Standard upsert failed, trying REST fallback...');
+            let fallbackSuccess = false;
+            
+            if (Platform.OS === 'web') {
+                try {
+                    let token = null;
+                    // 1. Try localStorage first (fastest, no network)
+                    try {
+                        const key = `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+                        const stored = localStorage.getItem(key);
+                        if (stored) token = JSON.parse(stored).access_token;
+                    } catch (_) {}
+                    
+                    // 2. If no token, try getSession with a strict timeout to prevent hanging
+                    if (!token) { 
+                        try {
+                            const { data } = await Promise.race([
+                                supabase.auth.getSession(),
+                                new Promise((_, reject) => setTimeout(() => reject(new Error('Session timeout')), 500))
+                            ]);
+                            token = data?.session?.access_token;
+                        } catch (err) { console.warn('[linkObjects] getSession timed out/failed during fallback', err); }
+                    }
+
+                    if (token) {
+                        const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/object_links`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${token}`,
+                                'apikey': CONFIG.SUPABASE_ANON_KEY,
+                                'Prefer': 'resolution=ignore-duplicates,return=representation'
+                            },
+                            body: JSON.stringify(rows)
+                        });
+                        
+                        if (res.ok) {
+                            const json = await res.json();
+                            data = json;
+                            error = null;
+                            fallbackSuccess = true;
+                            console.log('[linkObjects] REST Fallback success');
+                        } else if (res.status === 409) {
+                            // 409 Conflict means it already exists, which is fine for us
+                            console.log('[linkObjects] REST Fallback: 409 Conflict (already linked), treating as success');
+                            data = [];
+                            error = null;
+                            fallbackSuccess = true;
+                        } else {
+                            // Check for missing column error (400 Bad Request)
+                            if (res.status === 400) {
+                                const errText = await res.text();
+                                if (errText.includes('group_key')) {
+                                    console.warn('[linkObjects] REST fallback: group_key missing, retrying without it');
+                                    const rowsNoGroup = rows.map(({ group_key, ...rest }) => rest);
+                                    const retryRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/object_links`, {
+                                        method: 'POST',
+                                        headers: {
+                                            'Content-Type': 'application/json',
+                                            'Authorization': `Bearer ${token}`,
+                                            'apikey': CONFIG.SUPABASE_ANON_KEY,
+                                            'Prefer': 'resolution=ignore-duplicates,return=representation'
+                                        },
+                                        body: JSON.stringify(rowsNoGroup)
+                                    });
+                                    if (retryRes.ok) {
+                                        const json = await retryRes.json();
+                                        data = json;
+                                        error = null;
+                                        fallbackSuccess = true;
+                                        console.log('[linkObjects] REST Fallback retry success');
+                                    } else if (retryRes.status === 409) {
+                                        console.log('[linkObjects] REST Fallback retry: 409 Conflict, treating as success');
+                                        data = [];
+                                        error = null;
+                                        fallbackSuccess = true;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        console.warn('[linkObjects] REST Fallback failed: No auth token available');
+                    }
+                } catch (restErr) { console.error('[linkObjects] REST Fallback failed', restErr); }
+            }
+            
+            if (!fallbackSuccess) throw e;
+        }
+
+        // If group_key column missing (Standard Client), retry without it
         if (error && (error.code === '42703' || (error.message || '').includes('group_key'))) {
             console.warn('[linkObjects] group_key column missing in object_links, retrying without group key');
             const rowsNoGroup = rows.map(({ group_key, ...rest }) => rest);
-            const retry = await supabase
-                .from('object_links')
-                .upsert(rowsNoGroup, { onConflict: 'parent_id,child_id', ignoreDuplicates: true });
-            data = retry.data;
-            error = retry.error;
+            
+            try {
+                const retry = await withTimeout(
+                    supabase
+                        .from('object_links')
+                        .upsert(rowsNoGroup, { onConflict: 'parent_id,child_id', ignoreDuplicates: true })
+                        .select(),
+                    1000,
+                    'link-objects-retry'
+                );
+                data = retry.data;
+                error = retry.error;
+            } catch (e) {
+                console.warn('[linkObjects] Standard retry failed, trying REST fallback...');
+                let fallbackSuccess = false;
+                if (Platform.OS === 'web') {
+                    try {
+                        let token = null;
+                        try {
+                            const key = `sb-${new URL(CONFIG.SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
+                            const stored = localStorage.getItem(key);
+                            if (stored) token = JSON.parse(stored).access_token;
+                        } catch (_) {}
+                        
+                        if (!token) { 
+                            try {
+                                const { data } = await Promise.race([
+                                    supabase.auth.getSession(),
+                                    new Promise((_, reject) => setTimeout(() => reject(new Error('Session timeout')), 500))
+                                ]);
+                                token = data?.session?.access_token;
+                            } catch (_) {}
+                        }
+
+                        if (token) {
+                            const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/object_links`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': `Bearer ${token}`,
+                                    'apikey': CONFIG.SUPABASE_ANON_KEY,
+                                    'Prefer': 'resolution=ignore-duplicates,return=representation'
+                                },
+                                body: JSON.stringify(rowsNoGroup)
+                            });
+                            if (res.ok) {
+                                const json = await res.json();
+                                data = json;
+                                error = null;
+                                fallbackSuccess = true;
+                                console.log('[linkObjects] REST Fallback retry success');
+                            } else if (res.status === 409) {
+                                console.log('[linkObjects] REST Fallback retry: 409 Conflict, treating as success');
+                                data = [];
+                                error = null;
+                                fallbackSuccess = true;
+                            }
+                        }
+                    } catch (restErr) { console.error('[linkObjects] REST Fallback retry failed', restErr); }
+                }
+                if (!fallbackSuccess) throw e;
+            }
         }
         console.log('[linkObjects] upsert result', { error: error?.message, inserted: data?.length });
         if (error) throw error;

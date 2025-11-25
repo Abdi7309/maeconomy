@@ -4,11 +4,20 @@ import { Image, Linking, Modal, RefreshControl, ScrollView, StatusBar, Text, Tou
 import AppStyles, { colors } from '../AppStyles';
 import { supabase } from '../config/config';
 
-const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onRefresh, refreshing, fallbackTempItem }) => {
+const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onRefresh, refreshing, fallbackTempItem, activeTempObjects }) => {
     
     // --- NEW: State for the image modal ---
     const [modalVisible, setModalVisible] = useState(false);
     const [selectedImageUrl, setSelectedImageUrl] = useState(null);
+
+    const objectId = currentPath[currentPath.length - 1];
+
+    // Auto-refresh when this screen mounts or when objectId changes
+    useEffect(() => {
+        if (typeof onRefresh === 'function') {
+            onRefresh();
+        }
+    }, [objectId]);
 
     const findItemByPath = (data, path) => {
         let currentItems = data;
@@ -27,8 +36,16 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
         return foundItem;
     };
 
-    const objectId = currentPath[currentPath.length - 1];
     let item = findItemByPath(objectsHierarchy, currentPath);
+    
+    // Fallback: check activeTempObjects (for items that are saved but not yet in hierarchy, or still temp)
+    if (!item && activeTempObjects && Array.isArray(activeTempObjects)) {
+        const tempMatch = activeTempObjects.find(t => t.id === objectId);
+        if (tempMatch) {
+            item = tempMatch;
+        }
+    }
+
     // Allow temp objects to show a minimal properties screen before DB row exists
     if (!item && typeof objectId === 'string' && objectId.startsWith('temp_')) {
         item = {
@@ -42,13 +59,6 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
     if (!item) {
         return <View style={[AppStyles.screen, { justifyContent: 'center', alignItems: 'center' }]}><Text style={AppStyles.emptyStateText}>Item not found...</Text></View>;
     }
-
-    // Auto-refresh when this screen mounts or when objectId changes
-    useEffect(() => {
-        if (typeof onRefresh === 'function') {
-            onRefresh();
-        }
-    }, [objectId]);
 
     const renderIcon = (customColor = colors.lightGray500) => {
         return <Tag color={customColor} size={20} />;

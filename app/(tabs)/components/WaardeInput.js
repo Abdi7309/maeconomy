@@ -25,7 +25,7 @@ function formatNumber(value, maxDecimals = 6) {
   return decPart ? `${withThousands},${decPart}` : withThousands;
 }
 
-export default function WaardeInput({ value, onChange, onAddFormule, isFormula = false, computedValue = null, unit = '', error = null }) {
+export default function WaardeInput({ value, onChange, onAddFormule, isFormula = false, computedValue = null, unit = '', error = null, onFocus, onBlur }) {
   return (
     <View
       style={{
@@ -46,6 +46,9 @@ export default function WaardeInput({ value, onChange, onAddFormule, isFormula =
           placeholder="Waarde of formule"
           value={value}
           onChangeText={onChange}
+          onFocus={onFocus}
+          onBlur={onBlur}
+          blurOnSubmit={false}
           // Improve usability: allow submitting with enter on web
           onSubmitEditing={() => {
             // If user presses enter in a formula context, open picker for refinement
@@ -75,14 +78,13 @@ export default function WaardeInput({ value, onChange, onAddFormule, isFormula =
         accessibilityLabel="Formule kiezen"
         hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         onPress={() => {
-          console.log('[WaardeInput] Calculator button pressed, value:', value, 'isFormula:', isFormula);
           if (typeof onAddFormule === 'function') {
             onAddFormule();
           }
         }}
         style={{ padding: 8, borderLeftWidth: 1, borderLeftColor: colors.lightGray200 }}
       >
-        <Calculator color={colors.primary} size={20} />
+        <Calculator color={colors.blue600} size={20} />
       </TouchableOpacity>
     </View>
   );

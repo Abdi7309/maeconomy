@@ -44,6 +44,8 @@ const App = () => {
     const [pendingPropsByTempId, setPendingPropsByTempId] = useState({}); // tempId -> properties array
     // Use useRef to ensure we always read the latest queued properties in async callbacks
     const pendingPropsRef = useRef({});
+    // Persistent store for active temp objects across screen transitions (e.g. objects -> properties -> objects)
+    const activeTempObjectsRef = useRef([]);
 
     // Initialize app state and check for Supabase session
     useEffect(() => {
@@ -269,6 +271,16 @@ const App = () => {
         }
     };
 
+    const clearCachedData = async (type) => {
+        try {
+            const cacheKey = getCacheKey(type);
+            await AsyncStorage.removeItem(cacheKey);
+            console.log(`[Cache] Cleared ${type}`);
+        } catch (e) {
+            console.warn(`[Cache] Error clearing ${type}:`, e);
+        }
+    };
+
     const handleFetchObjects = async (isRefreshing = false) => {
         if (!filterOption) return;
         if(isRefreshing) setRefreshing(true);
@@ -366,7 +378,12 @@ const App = () => {
 
     const handleUpdateProperty = async (propertyId, payload) => {
         const success = await apiUpdateProperty(propertyId, payload);
-        // No automatic refresh here to prevent UI jumps. The calling screen handles the local state.
+
+        if (success) {
+            // Cache ongeldig maken zodat een refresh nieuwe data uit Supabase haalt
+            await clearCachedData('objects');
+        }
+
         return success;
     };
 
@@ -500,6 +517,7 @@ const App = () => {
                 objectsHierarchy={objectsHierarchy}
                 onFormuleSaved={handleFormuleSaved}
                 isLoading={isLoading}
+                activeTempObjectsRef={activeTempObjectsRef}
             />
         );
 
@@ -516,6 +534,7 @@ const App = () => {
                         onRefresh={onRefresh}
                         refreshing={refreshing}
                         findItemByPath={findItemByPath}
+                        activeTempObjects={activeTempObjectsRef.current}
                     />
 
                 );
@@ -533,6 +552,7 @@ const App = () => {
                         onRefresh={onRefresh}
                         onFormuleSaved={handleFormuleSaved}
                         findItemByPath={findItemByPath}
+                        activeTempObjects={activeTempObjectsRef.current}
                     />
                 );
             case 'materials':

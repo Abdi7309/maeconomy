@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Modal, Platform, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import AppStyles, { colors } from '../../AppStyles';
 import { createFormule, deleteProperty, fetchFormuleByExpression, fetchFormules, fetchFormulesSafe, updateProperty } from '../../api';
@@ -196,10 +196,23 @@ const formatNumberForLog = (n, decimals = 6) => {
     return { raw: n, toFixed: fixed, rounded, trimmed };
 };
 
+const SafeView = ({ children, ...rest }) => (
+    <View {...rest}>
+        {React.Children.map(children, (child) => {
+            if (typeof child === 'string' || typeof child === 'number') {
+                return <Text>{child}</Text>;
+            }
+            return child;
+        })}
+    </View>
+);
+
 const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft, onSaved }) => {
     const initialFormule = property?.formule || property?.Formule_expression || property?.formules?.formule || '';
     const [editedName, setEditedName] = useState(property?.name || '');
     const [editedValue, setEditedValue] = useState(property?.waarde || '');
+    // Local buffer for waarde input to prevent re-render focus loss when parent state updates
+    const [editedValueInput, setEditedValueInput] = useState(property?.waarde || '');
     const [editedFormule, setEditedFormule] = useState(initialFormule);
     const [editedUnit, setEditedUnit] = useState(property?.eenheid || '');
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -264,15 +277,24 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
         setEditedUnit(newUnit);
     };
 
+    // Init state ONLY when property id changes or modal just became visible to prevent resets on each parent re-render
+    const prevPropertyIdRef = React.useRef(null);
     useEffect(() => {
-        if (visible) {
+        if (!visible) return;
+        const currentId = property?.id;
+        const firstOpenForId = prevPropertyIdRef.current !== currentId;
+        if (firstOpenForId) {
+            prevPropertyIdRef.current = currentId;
             setEditedName(property?.name || '');
-            setEditedValue(property?.waarde || '');
+            const initialVal = property?.waarde || '';
+            setEditedValue(initialVal);
+            setEditedValueInput(initialVal);
             setEditedFormule(property?.formule || property?.Formule_expression || property?.formules?.formule || '');
             setEditedUnit(property?.eenheid || '');
             setEditedFormuleId(property?.Formule_id ?? property?.formule_id ?? null);
+            console.log('[EditPropertyModal] Initialized state for property id:', currentId);
         }
-    }, [visible, property]);
+    }, [visible, property?.id]);
 
     // No formule picker; typing is primary interaction
 
@@ -327,6 +349,20 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
         return { value: roundToDecimals(displayValue), unit: unitToShow, error: null };
     }, [editedFormule, mapForUnit, editedUnit]);
 
+    // Debounced preview, auto-sync guarded while user actively typing
+    const [formulaTyping, setFormulaTyping] = useState(false);
+    const formulaTypingTimerRef = React.useRef(null);
+
+    const handleFormulaChange = (text) => {
+        setEditedFormule(text);
+        if (text && editedFormuleId) setEditedFormuleId(null);
+        setFormulaTyping(true);
+        if (formulaTypingTimerRef.current) clearTimeout(formulaTypingTimerRef.current);
+        formulaTypingTimerRef.current = setTimeout(() => {
+            setFormulaTyping(false);
+        }, 400); // idle debounce
+    };
+
     const preview = useMemo(() => {
         if (!editedFormule || !/[+\-*/x×]/.test(editedFormule)) return { text: null, error: null };
         if (computedDisplay.error) return { text: computedDisplay.error, error: true };
@@ -335,17 +371,25 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
         return { text: finalText, error: false };
     }, [editedFormule, computedDisplay]);
 
-    // Keep the Waarde field in sync with computed display when a formula is present
+    // Keep Waarde field in sync only when user is not actively typing & not locked
     useEffect(() => {
         const isFormula = editedFormule && /[+\-*/x×]/.test(editedFormule);
         if (!isFormula) return;
+        if (formulaTyping) return; // skip while user typing
+        try {
+            if (property?.id && globalThis.__propertyValueLocks && globalThis.__propertyValueLocks[property.id]?.locked) {
+                return; // locked, skip
+            }
+        } catch (_) {}
         if (computedDisplay && typeof computedDisplay.value === 'number' && !isNaN(computedDisplay.value)) {
             const currentNum = parseFloat(String(editedValue).replace(',', '.'));
             if (!isFinite(currentNum) || Math.abs(currentNum - computedDisplay.value) > 1e-9) {
-                setEditedValue(String(computedDisplay.value));
+                const newVal = String(computedDisplay.value);
+                setEditedValue(newVal);
+                setEditedValueInput(newVal); // keep buffer aligned when formula drives value
             }
         }
-    }, [editedFormule, computedDisplay, setEditedValue]);
+    }, [editedFormule, computedDisplay, formulaTyping, editedValue]);
 
     const handleSave = async () => {
         if (!property?.id) { onClose(); return; }
@@ -398,8 +442,8 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
             name: basePayloadUi.name,
             waarde: basePayloadUi.waarde,
             eenheid: basePayloadUi.eenheid,
-            // snake_case for backend
-            formule_id: basePayloadUi.Formule_id,
+            // Use Formule_id (API expects this exact key)
+            Formule_id: basePayloadUi.Formule_id,
         };
 
         // Optimistic UI
@@ -467,7 +511,7 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
                 // Patch property with formula id if obtained
                 if (newId) {
                     try {
-                        const patchPayloadApi = { ...basePayloadApi, formule_id: newId };
+                        const patchPayloadApi = { ...basePayloadApi, Formule_id: newId };
                         const patched = await updateProperty(property.id, patchPayloadApi);
                         if (patched) {
                             console.log('[EditPropertyModal] Background formula link persisted.', { propertyId: property.id, newId });
@@ -521,8 +565,8 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
     return (
         <>
         <Modal transparent animationType={Platform.OS === 'ios' ? 'slide' : 'fade'} visible={visible} onRequestClose={onClose}>
-            <View style={[AppStyles.modalOverlay, { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)' }]}>
-                <View style={[AppStyles.card, { width: '90%', maxWidth: 520, padding: 16 }]}> 
+            <SafeView style={[AppStyles.modalOverlay, { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)' }]}>
+                <SafeView style={[AppStyles.card, { width: '90%', maxWidth: 520, padding: 16 }]}> 
                     <Text style={[AppStyles.headerTitleLg, { marginBottom: 12 }]}>Eigenschap bewerken</Text>
 
                     <Text style={AppStyles.formLabel}>Naam</Text>
@@ -541,13 +585,11 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
                         computedValue={computedDisplay && !computedDisplay.error ? computedDisplay.value : null}
                         unit={computedDisplay && !computedDisplay.error ? (computedDisplay.unit || '') : ''}
                         error={computedDisplay && computedDisplay.error ? computedDisplay.error : null}
-                        onChange={(text) => {
-                            setEditedFormule(text);
-                            if (text && editedFormuleId) setEditedFormuleId(null);
-                        }}
+                        onChange={handleFormulaChange}
+                        onFocus={() => { console.log('[EditPropertyModal] formule input FOCUS'); }}
+                        onBlur={() => { console.log('[EditPropertyModal] formule input BLUR'); }}
                         onAddFormule={() => {
                             setShowFormulePicker(true);
-                            // If not currently loading and list empty, trigger load
                             if (!formulesLoading && formulesList.length === 0) {
                                 loadFormules(false);
                             }
@@ -559,7 +601,26 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
                                 onPress={() => { setEditedFormuleId(null); setEditedFormule(''); }}
                                 style={{ paddingVertical: 8, paddingHorizontal: 12, backgroundColor: colors.lightGray100, borderRadius: 6, borderWidth: 1, borderColor: colors.lightGray300 }}
                             >
-                                <Text style={{ color: colors.lightGray800, fontWeight: '600' }}>Loskoppelen</Text>
+                                <Text style={{ color: colors.lightGray800, fontWeight: '600' }}>Loskoppelen (waarde blijft)</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                onPress={() => {
+                                    // Freeze huidige waarde zonder direct formule te verwijderen; user kan later zelf loskoppelen.
+                                    // We doen niets aan editedFormule zodat het zichtbaar blijft, maar voorkomen auto-overschrijving.
+                                    // Voeg een eenvoudige lock state toe op globalThis zodat her-openen binnen sessie blijft werken.
+                                    try { globalThis.__propertyValueLocks = globalThis.__propertyValueLocks || {}; } catch (_) {}
+                                    try {
+                                        if (property?.id) {
+                                            const locks = globalThis.__propertyValueLocks;
+                                            locks[property.id] = { locked: true, value: editedValue };
+                                        }
+                                    } catch (_) {}
+                                    // Omdat lock niet in DB zit: adviseer gebruiker om los te koppelen voor permanente bevriezing.
+                                    Alert.alert('Automatische berekening gepauzeerd', 'Deze waarde wordt niet meer automatisch overschreven zolang dit venster open blijft. Gebruik "Loskoppelen" voor permanente handmatige controle.');
+                                }}
+                                style={{ paddingVertical: 8, paddingHorizontal: 12, backgroundColor: colors.blue50, borderRadius: 6, borderWidth: 1, borderColor: colors.blue200 }}
+                            >
+                                <Text style={{ color: colors.blue700, fontWeight: '600' }}>Pauzeer auto</Text>
                             </TouchableOpacity>
                         </View>
                     )}
@@ -568,10 +629,22 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
                     <Text style={[AppStyles.formLabel, { marginTop: 12 }]}>Waarde</Text>
                     <TextInput
                         placeholder="Bijv. 20"
-                        value={editedValue}
-                        onChangeText={setEditedValue}
+                        value={editedValueInput}
+                        onChangeText={(text) => {
+                            setEditedValueInput(text);
+                        }}
+                        onBlur={() => {
+                            console.log('[EditPropertyModal] waarde input BLUR commit');
+                            // Commit buffer to main state if not formula controlled
+                            const isFormula = editedFormule && /[+\-*/x×]/.test(editedFormule);
+                            if (!isFormula) {
+                                setEditedValue(editedValueInput);
+                            }
+                        }}
+                        onFocus={() => { console.log('[EditPropertyModal] waarde input FOCUS'); }}
                         editable={!(editedFormule && /[+\-*/x×]/.test(editedFormule))}
                         style={[AppStyles.formInput, (editedFormule && /[+\-*/x×]/.test(editedFormule)) && { backgroundColor: '#F9FAFB', color: colors.lightGray800 }]}
+                        blurOnSubmit={false}
                     />
                     {editedFormule && /[+\-*/x×]/.test(editedFormule) && (
                         <Text style={{ color: colors.lightGray600, marginTop: 4 }}>
@@ -600,21 +673,21 @@ const EditPropertyModal = ({ visible, onClose, property, existingPropertiesDraft
                         ))}
                     </View>
 
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 16 }}>
+                    <SafeView style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 16 }}>
                         <TouchableOpacity onPress={handleDelete} style={{ paddingVertical: 10, paddingHorizontal: 14, backgroundColor: colors.red600, borderRadius: 8 }}>
                             <Text style={{ color: colors.white, fontWeight: '600' }}>Verwijder</Text>
                         </TouchableOpacity>
-                        <View style={{ flexDirection: 'row' }}>
+                        <SafeView style={{ flexDirection: 'row' }}>
                             <TouchableOpacity onPress={onClose} style={{ paddingVertical: 10, paddingHorizontal: 14, backgroundColor: colors.lightGray200, borderRadius: 8, marginRight: 8 }}>
                                 <Text style={{ color: colors.lightGray800, fontWeight: '600' }}>Annuleer</Text>
                             </TouchableOpacity>
                             <TouchableOpacity onPress={handleSave} style={{ paddingVertical: 10, paddingHorizontal: 14, backgroundColor: colors.blue600, borderRadius: 8 }}>
                                 <Text style={{ color: colors.white, fontWeight: '600' }}>Opslaan</Text>
                             </TouchableOpacity>
-                        </View>
-                    </View>
-                </View>
-            </View>
+                        </SafeView>
+                    </SafeView>
+                </SafeView>
+            </SafeView>
         </Modal>
 
         {/* Custom Delete Confirmation Modal */}

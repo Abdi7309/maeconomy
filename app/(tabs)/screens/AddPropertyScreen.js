@@ -1,7 +1,7 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { ChevronLeft, FileText, Paperclip, Plus, Tag, X } from 'lucide-react-native';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, ScrollView, StatusBar, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { fetchFormules as fetchFormulesApi } from '../api';
 import AppStyles, { colors } from '../AppStyles';
@@ -205,6 +205,18 @@ const addOptimisticProperties = (objectId, props) => {
     cache.map.set(objectId, { props: Array.from(mergedMap.values()), expires: now + cache.expiryMs });
 };
 
+const getOptimisticProperties = (objectId) => {
+    if (!objectId) return [];
+    const cache = ensureOptimisticPropCache();
+    const entry = cache.map.get(objectId);
+    if (!entry) return [];
+    if (Date.now() > entry.expires) {
+        cache.map.delete(objectId);
+        return [];
+    }
+    return entry.props || [];
+};
+
 const AddPropertyScreen = ({ ...props }) => {
     const [newPropertiesList, setNewPropertiesList] = useState([]);
     const [nextNewPropertyId, setNextNewPropertyId] = useState(0);
@@ -232,6 +244,15 @@ const AddPropertyScreen = ({ ...props }) => {
 
     const objectIdForProperties = props.currentPath[props.currentPath.length - 1];
     let item = props.findItemByPath(props.objectsHierarchy, props.currentPath);
+
+    // Fallback: check activeTempObjects if not found in hierarchy
+    if (!item && props.activeTempObjects && Array.isArray(props.activeTempObjects)) {
+        const tempMatch = props.activeTempObjects.find(t => t.id === objectIdForProperties);
+        if (tempMatch) {
+            item = tempMatch;
+        }
+    }
+
     // Allow working on a temporary object before it exists in DB
     if (!item && typeof objectIdForProperties === 'string' && objectIdForProperties.startsWith('temp_')) {
         item = {
@@ -243,6 +264,26 @@ const AddPropertyScreen = ({ ...props }) => {
     }
 
     if (!item) return null;
+
+    // Merge optimistic properties from global cache to ensure they are visible even if DB sync lags
+    const displayProperties = useMemo(() => {
+        const baseProps = item.properties || [];
+        const optimistic = getOptimisticProperties(objectIdForProperties);
+        
+        if (!optimistic || optimistic.length === 0) return baseProps;
+
+        const existingIds = new Set(baseProps.map(p => p.id));
+        const existingNames = new Set(baseProps.map(p => p.name));
+        
+        // Only add optimistic props that aren't already in the base list (by ID or Name)
+        const propsToAdd = optimistic.filter(op => 
+             !existingIds.has(op.id) && !existingNames.has(op.name)
+        );
+        
+        if (propsToAdd.length === 0) return baseProps;
+        
+        return [...baseProps, ...propsToAdd];
+    }, [item, objectIdForProperties]);
 
     const allUnits = ['m', 'cm', 'mm', 'm²', 'cm²', 'mm²', 'm³', 'kg', 'g', 'L', 'mL'];
 
@@ -269,10 +310,10 @@ const AddPropertyScreen = ({ ...props }) => {
         })();
     }, []);
 
-    // Initialize or refresh the draft when item.properties changes
+    // Initialize or refresh the draft when displayProperties changes
     useEffect(() => {
         // Preserve formula expressions even if only available via nested relation (formules.formule)
-        const draft = (item.properties || []).map(p => ({
+        const draft = displayProperties.map(p => ({
             id: p.id,
             name: p.name,
             waarde: p.waarde,
@@ -282,7 +323,7 @@ const AddPropertyScreen = ({ ...props }) => {
             eenheid: p.eenheid || ''
         }));
         setExistingPropertiesDraft(draft);
-    }, [item.properties]);
+    }, [displayProperties]);
 
     const addNewPropertyField = () => {
         setNewPropertiesList(prevList => {
@@ -867,8 +908,8 @@ const AddPropertyScreen = ({ ...props }) => {
                             Bestaande Eigenschappen
                         </Text>
                         <View style={AppStyles.propertyList}>
-                            {(item.properties || []).length > 0 ? (
-                                (item.properties || []).map((prop, index) => (
+                            {displayProperties.length > 0 ? (
+                                displayProperties.map((prop, index) => (
                                     <View key={index} style={[AppStyles.propertyItem, { marginBottom: 12 }]}>
                                         <View style={{ width: '100%' }}>
                                             <View
@@ -919,16 +960,16 @@ const AddPropertyScreen = ({ ...props }) => {
                                                         {(() => {
                                                             // Create combined properties list for formula evaluation
                                                             const allProperties = [
-                                                                ...(item.properties || []).map(p => ({
-                                                                    name: p.name,
-                                                                    value: p.waarde,
-                                                                    unit: p.eenheid || ''
-                                                                })),
-                                                                ...newPropertiesList.map(p => ({
-                                                                    name: p.name,
-                                                                    value: p.value,
-                                                                    unit: p.unit || ''
-                                                                }))
+                                                            ...displayProperties.map((p) => ({
+                                                                name: p.name,
+                                                                value: p.waarde,
+                                                                unit: p.eenheid || '',
+                                                            })),
+                                                            ...newPropertiesList.map((p) => ({
+                                                                name: p.name,
+                                                                value: p.value,
+                                                                unit: p.unit || '',
+                                                            })),
                                                             ];
                                                             const formulaExpr = (prop.Formule_expression && String(prop.Formule_expression))
                                                                 || (prop.formule && String(prop.formule))
@@ -1038,7 +1079,7 @@ const AddPropertyScreen = ({ ...props }) => {
                         <EditPropertyModal
                             visible={showEditModal}
                             onClose={() => setShowEditModal(false)}
-                            property={item.properties[modalPropertyIndex]}
+                            property={displayProperties[modalPropertyIndex]}
                             existingPropertiesDraft={existingPropertiesDraft}
                             onSaved={async (updated) => {
                                 const idx = modalPropertyIndex;
@@ -1089,32 +1130,6 @@ const AddPropertyScreen = ({ ...props }) => {
                                     }
                                     return p;
                                 });
-
-                                // 3. Identify and save all properties whose values have changed (excluding edited one)
-                                const updatePromises = [];
-                                recomputedDraft.forEach((newProp, index) => {
-                                    const oldProp = originalDraft[index];
-                                    if (!oldProp) return;
-                                    if (index === idx) return; // edited property already handled by modal
-                                    if (newProp.id && newProp.waarde !== oldProp.waarde) {
-                                        console.log(`[EditPropertyModal callback] Dependent property '${newProp.name}' recalculated (${oldProp.waarde} -> ${newProp.waarde}), queuing save.`);
-                                        updatePromises.push(
-                                            props.onUpdate(newProp.id, {
-                                                name: newProp.name,
-                                                waarde: newProp.waarde,
-                                                Formule_id: newProp.Formule_id,
-                                                eenheid: newProp.eenheid,
-                                            })
-                                        );
-                                    }
-                                });
-
-                                // Execute all pending save operations
-                                if (updatePromises.length > 0) {
-                                    await Promise.all(updatePromises);
-                                    // Optionally, show a single confirmation after all saves are done
-                                    Alert.alert('Success', `${updatePromises.length} afhankelijke eigenschap(pen) zijn bijgewerkt.`);
-                                }
 
                                 // 4. Merge recomputed values back into full property objects preserving original relation data (formules, files)
                                 if (Array.isArray(item.properties)) {

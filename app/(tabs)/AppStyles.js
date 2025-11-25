@@ -60,21 +60,20 @@ export const shadows = {
 
 const AppStyles = StyleSheet.create({
     appContainer: {
-        flex: 1, // Make it fill the screen
-        backgroundColor: colors.lightGray100, // Overall background
-        // Conditional styling for desktop
-        ...(IS_DESKTOP && {
-            flexDirection: 'row', // For side-by-side layout (e.g., list on left, detail on right)
-        }),
-    },
+    flex: 1,
+    backgroundColor: colors.lightGray100,
+    // Conditional styling for desktop
+    ...(IS_DESKTOP && {
+        flexDirection: 'row',
+    }),
+    },  
     screen: {
-        flex: 1, // Make screen fill available space
-        backgroundColor: colors.white, // Default screen background to white
-        // Conditional styling for desktop for the main screen container
-        ...(IS_DESKTOP && {
-            borderRightWidth: 1,
-            borderRightColor: colors.lightGray200,
-        }),
+    flex: 1,
+    backgroundColor: colors.white,
+    ...(IS_DESKTOP && {
+        borderRightWidth: 1,
+        borderRightColor: colors.lightGray200,
+    }),
     },
     screenWhite: {
         backgroundColor: colors.white,
@@ -109,13 +108,12 @@ const AppStyles = StyleSheet.create({
     },
     // Updated style for smaller, left-aligned breadcrumb-like titles
     headerTitleSmall: {
-        fontSize: 1 * 16, // Default smaller font size for mobile breadcrumbs
-        fontWeight: '600', // Still bold for emphasis
-        color: colors.lightGray900, // Always black for "Objecten" and other breadcrumbs
-        // No flex: 1 or textAlign: 'center' here, as it's part of a flex row
-        ...(IS_DESKTOP && {
-            fontSize: 1.7 * 16, // Larger font size for desktop breadcrumbs (was 1.25 * 16)
-        }),
+    fontSize: 1 * 16,
+    fontWeight: '600',
+    color: colors.lightGray900,
+    ...(IS_DESKTOP && {
+        fontSize: 1.7 * 16,
+    }),
     },
     headerBackButton: {
         padding: 0.5 * 16,
@@ -127,14 +125,13 @@ const AppStyles = StyleSheet.create({
         width: 40, // Match the width of headerBackButton
         height: 40, // Match the height of headerBackButton
     },
-    contentPadding: {
-        paddingVertical: 1.5 * 16,
-        paddingHorizontal: 1 * 16,
-        // Conditional styling for desktop
-        ...(IS_DESKTOP && {
-            padding: 2 * 16,
-        }),
-    },
+contentPadding: {
+  paddingVertical: 1.5 * 16,
+  paddingHorizontal: 1 * 16,
+  ...(IS_DESKTOP && {
+    padding: 2 * 16,
+  }),
+},
     screenContentWrapper: {
         paddingBottom: 2 * 16, // Added padding for scrollable content below fixed header
     },
@@ -457,7 +454,7 @@ const AppStyles = StyleSheet.create({
         paddingVertical: 2.5 * 16,
         borderRadius: 12,
         ...shadows.lg,
-    },
+        },
     authTitle: {
         fontSize: 2.25 * 16, // 36px
         fontWeight: 'bold',

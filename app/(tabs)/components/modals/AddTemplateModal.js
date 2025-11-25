@@ -10,9 +10,9 @@ const AddTemplateModal = ({ visible, onClose, onTemplateSaved }) => {
     const [error, setError] = useState('');
 
     const handlePropertyChange = (idx, field, value) => {
-        const updated = [...templateProperties];
-        updated[idx][field] = value;
-        setTemplateProperties(updated);
+    const updated = [...templateProperties];
+    updated[idx][field] = value;
+    setTemplateProperties(updated);
     };
 
     const handleRemoveProperty = (idx) => {
@@ -24,7 +24,7 @@ const AddTemplateModal = ({ visible, onClose, onTemplateSaved }) => {
     };
 
     const handleAddProperty = () => {
-        setTemplateProperties([...templateProperties, { name: '', value: '' }]);
+    setTemplateProperties([...templateProperties, { name: '', value: '' }]);
     };
 
     const handleSave = async () => {
