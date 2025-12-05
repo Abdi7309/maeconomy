@@ -1,14 +1,14 @@
+import { Calculator } from 'lucide-react-native';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Modal, Platform, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { Calculator } from 'lucide-react-native';
 import {
     createFormule,
     deleteProperty,
     fetchFormuleByExpression,
     fetchFormules,
     fetchFormulesSafe,
-    updateProperty,
-    findPropertyIdByName
+    findPropertyIdByName,
+    updateProperty
 } from '../../api';
 import AppStyles, { colors } from '../../AppStyles';
 import AddFormuleModal from './AddFormuleModal';
@@ -160,22 +160,16 @@ const evaluateFormule = (Formule, propertiesMap) => {
         return valueInKg.toString();
     });
 
-    // Normalize volume units to liters (L)
-    expression = expression.replace(/(\d+(?:\.\d+)?)\s*(mL|L)\b/gi, (match, num, unit) => {
-        const valueInL = convertToUnit(parseFloat(num), unit, 'L');
-        return valueInL.toString();
+    // Normalize volume units to m³
+    expression = expression.replace(/(\d+(?:\.\d+)?)\s*(mL|L|m³)\b/gi, (match, num, unit) => {
+        const valueInM3 = convertToUnit(parseFloat(num), unit === 'm³' ? 'm³' : unit, 'm³');
+        return valueInM3.toString();
     });
 
     // Normalize area units to m²
     expression = expression.replace(/(\d+(?:\.\d+)?)\s*(m²|cm²|mm²)\b/gi, (match, num, unit) => {
         const valueInM2 = convertToUnit(parseFloat(num), unit, 'm²');
         return valueInM2.toString();
-    });
-
-    // Normalize cubic units to m³
-    expression = expression.replace(/(\d+(?:\.\d+)?)\s*(m³)\b/gi, (match, num, unit) => {
-        const valueInM3 = convertToUnit(parseFloat(num), unit, 'm³');
-        return valueInM3.toString();
     });
 
     try {
@@ -505,29 +499,13 @@ const EditPropertyModal = ({ visible, onClose, objectId, property, existingPrope
             const normalizedExprForCalc = editedFormule.replace(/[x×]/g, '*');
             const { value: calculatedValue, error } = evaluateFormule(normalizedExprForCalc, mapForUnit);
             if (!error && calculatedValue !== null) {
-                const hasMulDiv = /[*/]/.test(normalizedExprForCalc);
                 const u = sanitizeUnit(editedUnit);
-                const isLength = ['m', 'cm', 'mm'].includes(u);
-                const isMass = ['kg', 'g'].includes(u);
-                const isVolume = ['L', 'mL', 'm³'].includes(u);
-                const isArea = ['m²', 'cm²', 'mm²'].includes(u);
                 let base = 'm';
-                if (isMass) base = 'kg';
-                else if (isVolume) base = u === 'm³' ? 'm³' : 'L';
-                else if (isArea) base = 'm²';
-                if (hasMulDiv) {
-                    if (isArea || isVolume) {
-                        waardeToSend = convertToUnit(calculatedValue, base, u);
-                    } else {
-                        waardeToSend = calculatedValue;
-                    }
-                } else {
-                    if (isLength || isMass || isVolume) {
-                        waardeToSend = convertToUnit(calculatedValue, base, u);
-                    } else {
-                        waardeToSend = calculatedValue;
-                    }
-                }
+                if (['kg', 'g'].includes(u)) base = 'kg';
+                else if (['m³', 'L', 'mL'].includes(u)) base = 'm³';
+                else if (['m²', 'cm²', 'mm²'].includes(u)) base = 'm²';
+                
+                waardeToSend = convertToUnit(calculatedValue, base, u);
             }
         }
 

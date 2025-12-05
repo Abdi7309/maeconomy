@@ -1,5 +1,6 @@
 
-import * as DocumentPicker from 'expo-document-picker';import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
 import { Calculator, ChevronLeft, FileText, Paperclip, Plus, Tag, X } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, ScrollView, StatusBar, Text, TextInput, TouchableOpacity, View } from 'react-native';
@@ -187,22 +188,17 @@ const evaluateFormule = (Formule, properties) => {
         return valueInKg.toString();
     });
 
-    // Handle volume units (normalize to L)
-    expression = expression.replace(/(\d+(?:\.\d+)?)\s*(mL|L)\b/gi, (match, num, unit) => {
-        const valueInL = convertToUnit(parseFloat(num), unit.toLowerCase(), 'L');
-        return valueInL.toString();
+    // Handle volume units (normalize to m³)
+    expression = expression.replace(/(\d+(?:\.\d+)?)\s*(mL|L|m³)\b/gi, (match, num, unit) => {
+        // Normalize everything to m³
+        const valueInM3 = convertToUnit(parseFloat(num), unit === 'm³' ? 'm³' : unit, 'm³');
+        return valueInM3.toString();
     });
 
     // Handle area units (normalize to m²)
     expression = expression.replace(/(\d+(?:\.\d+)?)\s*(m²|cm²|mm²)\b/gi, (match, num, unit) => {
         const valueInM2 = convertToUnit(parseFloat(num), unit, 'm²');
         return valueInM2.toString();
-    });
-
-    // Handle cubic meters units (normalize to m³) if explicitly used
-    expression = expression.replace(/(\d+(?:\.\d+)?)\s*(m³)\b/gi, (match, num, unit) => {
-        const valueInM3 = convertToUnit(parseFloat(num), unit, 'm³');
-        return valueInM3.toString();
     });
 
     try {
@@ -1318,7 +1314,14 @@ const AddPropertyScreen = ({ ...props }) => {
                                             return { ...p, waarde: 'Error' };
                                         }
                                         
-                                        const finalValue = convertToUnit(value, 'm', outputUnit);
+                                        // Determine base unit from output unit
+                                        let baseUnit = 'm';
+                                        const u = outputUnit;
+                                        if (['kg', 'g'].includes(u)) baseUnit = 'kg';
+                                        else if (['m³', 'L', 'mL'].includes(u)) baseUnit = 'm³';
+                                        else if (['m²', 'cm²', 'mm²'].includes(u)) baseUnit = 'm²';
+
+                                        const finalValue = convertToUnit(value, baseUnit, outputUnit);
                                         const rounded = roundToDecimals(finalValue);
                                         return { ...p, waarde: String(rounded) };
                                     }

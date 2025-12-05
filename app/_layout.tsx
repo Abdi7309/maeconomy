@@ -2,7 +2,7 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { onAuthStateChanged } from 'firebase/auth';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Text, TouchableOpacity, View } from 'react-native';
 import 'react-native-reanimated';
@@ -42,8 +42,7 @@ export default function RootLayout() {
   const handleRestrictedLogout = async () => {
     setAuthLoading(true);
     try {
-      // Firebase signOut is already called in (tabs)/index.js when user is unauthorized
-      // This just clears local state
+      await signOut(auth);
       setUser(null);
     } catch (signOutError) {
       console.error('[RootLayout] Unexpected sign-out error:', signOutError);
