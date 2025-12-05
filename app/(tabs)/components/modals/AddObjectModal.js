@@ -38,8 +38,8 @@ const AddObjectModal = ({ visible, onClose, onSave, onAttachExisting, objectsHie
     const removeField = (idx) => {
         const next = names.slice();
         next.splice(idx, 1);
-        // If all fields are removed, create a fresh empty input
-        if (next.length === 0) next.push('');
+        // If all fields are removed, create a fresh empty input ONLY if no existing items selected
+        if (next.length === 0 && selectedExistingIds.length === 0) next.push('');
         setNames(next);
     };
 
@@ -131,9 +131,41 @@ const AddObjectModal = ({ visible, onClose, onSave, onAttachExisting, objectsHie
                         <ScrollView style={{ maxHeight: '70%' }} contentContainerStyle={{ paddingBottom: 8 }}>
                             <View style={AppStyles.formGroup}>
                                 <Text style={AppStyles.formLabel}>{mode === 'single' ? 'Objectnaam' : 'Objectnamen'}</Text>
-                                {(mode === 'single' ? [names[0]] : names).map((val, idx) => (
+                                {/* Staged existing selection field - only show when there are selections */}
+                                {selectedExisting.length > 0 && (
+                                    <View>
+                                        <View style={{ flex: 1 }}>
+                                            <View>
+                                                {selectedExisting.map((s) => (
+                                                    <View key={s.id} style={{ marginBottom: 8 }}>
+                                                        <View style={[AppStyles.formInput, { flexDirection: 'row', alignItems: 'center', minHeight: 44, paddingVertical: 10, paddingHorizontal: 12, paddingRight: 6 }]}> 
+                                                            <Text style={{ color: colors.lightGray700, flex: 1 }}>{s.name}</Text>
+                                                            <TouchableOpacity
+                                                                onPress={() => {
+                                                                    setSelectedExistingIds((prev) => {
+                                                                        const next = prev.filter((x) => x !== s.id);
+                                                                        // If we removed the last existing item AND names is empty, add one empty name field
+                                                                        if (next.length === 0 && names.length === 0) {
+                                                                            setNames(['']);
+                                                                        }
+                                                                        return next;
+                                                                    });
+                                                                }}
+                                                                accessibilityLabel="Verwijder dit object"
+                                                                style={{ padding: 6 }}
+                                                            >
+                                                                <Trash2 color={colors.lightGray600} size={16} />
+                                                            </TouchableOpacity>
+                                                        </View>
+                                                    </View>
+                                                ))}
+                                            </View>
+                                        </View>
+                                    </View>
+                                )}
+                                {(mode === 'single' ? (names.length ? [names[0]] : []) : names).map((val, idx) => (
                                     <View key={idx} style={{ marginBottom: 8 }}>
-                                        <View style={[AppStyles.formInput, { flexDirection: 'row', alignItems: 'center', flex: 1, paddingRight: 6 }]}> 
+                                        <View style={[AppStyles.formInput, { flexDirection: 'row', alignItems: 'center', minHeight: 44, paddingVertical: 10, paddingHorizontal: 12, paddingRight: 6 }]}> 
                                             <TextInput
                                                 ref={(el) => { inputRefs.current[idx] = el; }}
                                                 placeholder={mode === 'single' ? 'Naam' : `Naam ${idx + 1}`}
@@ -166,29 +198,6 @@ const AddObjectModal = ({ visible, onClose, onSave, onAttachExisting, objectsHie
                                         </View>
                                     </View>
                                 ))}
-                                {/* Staged existing selection field - only show when there are selections */}
-                                {selectedExisting.length > 0 && (
-                                    <View style={{ marginTop: 8 }}>
-                                        <View style={{ flex: 1 }}>
-                                            <View>
-                                                {selectedExisting.map((s) => (
-                                                    <View key={s.id} style={{ marginBottom: 8 }}>
-                                                        <View style={[AppStyles.formInput, { flexDirection: 'row', alignItems: 'center', minHeight: 44, paddingVertical: 10, paddingHorizontal: 12, paddingRight: 6 }]}> 
-                                                            <Text style={{ color: colors.lightGray700, flex: 1 }}>{s.name}</Text>
-                                                            <TouchableOpacity
-                                                                onPress={() => setSelectedExistingIds((prev) => prev.filter((x) => x !== s.id))}
-                                                                accessibilityLabel="Verwijder dit object"
-                                                                style={{ padding: 6 }}
-                                                            >
-                                                                <Trash2 color={colors.lightGray600} size={16} />
-                                                            </TouchableOpacity>
-                                                        </View>
-                                                    </View>
-                                                ))}
-                                            </View>
-                                        </View>
-                                    </View>
-                                )}
                                 {mode !== 'single' && (
                                     <View style={{ marginTop: 8 }}>
                                         <TouchableOpacity
@@ -294,14 +303,28 @@ const AddObjectModal = ({ visible, onClose, onSave, onAttachExisting, objectsHie
                     onClose={() => setShowAttach(false)}
                     objectsHierarchy={objectsHierarchy}
                     excludeIds={excludeIds}
+                    singleSelection={mode === 'single'}
                     onAttach={(ids) => {
                         setShowAttach(false);
                         // Stage without linking yet
                         console.log('[AddObjectModal] Staged existing ids', ids);
                         setSelectedExistingIds((prev) => {
+                            if (mode === 'single') {
+                                // If single mode, replace selection instead of adding
+                                return ids;
+                            }
                             const set = new Set(prev);
-                            ids.forEach((id) => set.add(Number(id)));
+                            ids.forEach((id) => set.add(id));
                             return Array.from(set);
+                        });
+                        // If we have names that are just empty, clear them so the user doesn't see an empty input
+                        setNames(prev => {
+                            // In single mode, if we selected an ID, we must clear the name input (even if it had text)
+                            if (mode === 'single' && ids.length > 0) {
+                                return [];
+                            }
+                            const hasContent = prev.some(n => n.trim().length > 0);
+                            return hasContent ? prev : [];
                         });
                     }}
                 />

@@ -488,7 +488,7 @@ const EditPropertyModal = ({ visible, onClose, objectId, property, existingPrope
 
     const handleSave = async () => {
         console.log('[EditPropertyModal] handleSave called. objectId:', objectId, 'propertyId:', property?.id);
-        if (!property?.id) { onClose(); return; }
+        if (property?.id === undefined || property?.id === null) { onClose(); return; }
 
         if (!objectId) {
             console.warn('[EditPropertyModal] Missing objectId, skipping backend update');

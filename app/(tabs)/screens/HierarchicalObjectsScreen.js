@@ -171,7 +171,15 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                 const tempsToKeep = [];
 
                 relevantTemps.forEach(temp => {
-                    const matchIdx = merged.findIndex(dbObj => dbObj.naam === temp.naam && (dbObj.group_key || null) === (temp.group_key || null));
+                    // Check if a DB version exists by name AND group_key (if applicable)
+                    // Also check if we have a DB object with the same ID (unlikely for temp, but possible if ID was pre-assigned)
+                    const matchIdx = merged.findIndex(dbObj => {
+                        // Match by ID if temp has a real-looking ID (not starting with temp_)
+                        if (temp.id && !String(temp.id).startsWith('temp_') && dbObj.id === temp.id) return true;
+                        
+                        // Match by Name + Group Key
+                        return dbObj.naam === temp.naam && (dbObj.group_key || null) === (temp.group_key || null);
+                    });
                     
                     if (matchIdx === -1) {
                         // Still no DB version: keep temp visible at top
@@ -185,12 +193,15 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                         }
 
                         // Replace DB version but keep the same card key and timestamp for a smooth handoff
-                        merged[matchIdx] = {
-                            ...merged[matchIdx],
-                            created_at: temp.created_at || merged[matchIdx].created_at,
-                            __instanceKey: temp.__instanceKey || temp.id,
-                            __justCreated: true,
-                        };
+                        // Only do this if the DB version isn't already marked as just created
+                        if (!merged[matchIdx].__justCreated) {
+                            merged[matchIdx] = {
+                                ...merged[matchIdx],
+                                created_at: temp.created_at || merged[matchIdx].created_at,
+                                __instanceKey: temp.__instanceKey || temp.id,
+                                __justCreated: true,
+                            };
+                        }
                         
                         // Trigger resolution callback
                         if (onTempObjectResolved) {
@@ -200,7 +211,10 @@ const HierarchicalObjectsScreen = ({ items, currentLevelPath, setCurrentPath, se
                 });
 
                 // Prepend remaining temps
-                return [...tempsToKeep, ...merged];
+                // Filter out any temps that might have been added to merged list already (double safety)
+                const uniqueTemps = tempsToKeep.filter(t => !merged.some(m => m.naam === t.naam && (m.group_key || null) === (t.group_key || null)));
+                
+                return [...uniqueTemps, ...merged];
             } catch (e) {
                 console.warn('[level merge] failed, using base', e);
                 return base;

@@ -140,8 +140,16 @@ const fetchPropertiesForObject = async (objectId) => {
 
 // ===== Objects & hierarchie =====
 
-const fetchObjectChildren = async (parentId, profileMap = {}) => {
+const fetchObjectChildren = async (parentId, profileMap = {}, ancestors = new Set()) => {
   try {
+    // Cycle detection
+    if (ancestors.has(parentId)) {
+      console.warn('[fetchObjectChildren] Cycle detected for parentId:', parentId);
+      return [];
+    }
+    const nextAncestors = new Set(ancestors);
+    nextAncestors.add(parentId);
+
     const objectsRef = collection(db, 'objects');
     const qChildren = query(
       objectsRef,
@@ -150,15 +158,60 @@ const fetchObjectChildren = async (parentId, profileMap = {}) => {
     );
     const snap = await getDocs(qChildren);
 
-    const children = snap.docs.map((d) => ({
+    let children = snap.docs.map((d) => ({
       id: d.id,
       ...d.data(),
     }));
 
+    // Fetch linked children
+    try {
+      const linksRef = collection(db, 'object_links');
+      const qLinks = query(linksRef, where('parent_id', '==', parentId));
+      const linksSnap = await getDocs(qLinks);
+      
+      if (!linksSnap.empty) {
+        // Map child_id -> link data (to get group_key)
+        const linksMap = new Map();
+        linksSnap.docs.forEach(d => {
+            const data = d.data();
+            linksMap.set(data.child_id, data);
+        });
+        
+        const linkedChildIds = Array.from(linksMap.keys());
+
+        // Fetch linked objects (parallel)
+        const linkedObjects = await Promise.all(linkedChildIds.map(async (childId) => {
+          try {
+            const childDoc = await getDoc(doc(db, 'objects', childId));
+            if (childDoc.exists()) {
+              const linkData = linksMap.get(childId);
+              return {
+                id: childDoc.id,
+                ...childDoc.data(),
+                // Use group_key from the link if present
+                group_key: linkData.group_key || null,
+                __isLinked: true
+              };
+            }
+          } catch (e) {
+            console.warn('[fetchObjectChildren] Failed to fetch linked object:', childId);
+          }
+          return null;
+        }));
+        
+        children = [...children, ...linkedObjects.filter(Boolean)];
+        
+        // Re-sort combined list
+        children.sort((a, b) => (a.naam || '').localeCompare(b.naam || ''));
+      }
+    } catch (e) {
+      console.warn('[fetchObjectChildren] Error fetching links (collection might be missing):', e);
+    }
+
     const childrenWithGrandchildren = await Promise.all(
       children.map(async (child) => {
         const [grandchildren, properties] = await Promise.all([
-          fetchObjectChildren(child.id, profileMap),
+          fetchObjectChildren(child.id, profileMap, nextAncestors),
           fetchPropertiesForObject(child.id),
         ]);
 
@@ -271,7 +324,7 @@ export const handleAddObject = async (parentPath, newObjectData, userToken) => {
       parentPath && parentPath.length > 0
         ? parentPath[parentPath.length - 1]
         : null;
-    const { name, names, materialFlowType = 'default' } = newObjectData || {};
+    const { name, names, materialFlowType = 'default', groupKey: providedGroupKey } = newObjectData || {};
 
     let items = [];
     if (Array.isArray(names) && names.length > 0) {
@@ -297,10 +350,9 @@ export const handleAddObject = async (parentPath, newObjectData, userToken) => {
       userToken
     );
 
-    const groupKey =
-      uniqueNames.length > 1
+    const groupKey = providedGroupKey || (uniqueNames.length > 1
         ? `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
-        : null;
+        : null);
 
     const objectsRef = collection(db, 'objects');
     const batch = writeBatch(db);
@@ -360,10 +412,15 @@ export const addProperties = async (objectId, properties) => {
     }
 
     const batch = writeBatch(db);
+    const generatedIds = [];
 
     for (const prop of properties) {
-      // Use Firestore auto-ID if prop.id is missing (never use name)
-      const propId = prop.id || doc(collection(db, `objects/${objectId}/eigenschappen`)).id;
+      // Use Firestore auto-ID if prop.id is missing, numeric (temp), or starts with temp_
+      let propId = prop.id;
+      if (!propId || typeof propId === 'number' || String(propId).startsWith('temp_')) {
+          propId = doc(collection(db, `objects/${objectId}/eigenschappen`)).id;
+      }
+      generatedIds.push(propId);
 
       // ---- FILE UPLOAD ----
       const files = [];
@@ -407,6 +464,7 @@ export const addProperties = async (objectId, properties) => {
         eenheid: prop.eenheid ?? '',
         formule: prop.formule ?? prop.Formule_expression ?? '',
         Formule_id: prop.Formule_id ?? null,
+        index: prop.index !== undefined ? prop.index : 9999,
         files,
         created_at: serverTimestamp(),
         updated_at: serverTimestamp(),
@@ -421,7 +479,7 @@ export const addProperties = async (objectId, properties) => {
     await batch.commit();
 
     console.log('[addProperties] Properties saved in subcollection only');
-    return true;
+    return { success: true, ids: generatedIds };
   } catch (err) {
     console.error('[addProperties] Error:', err);
     return false;
@@ -562,4 +620,135 @@ export const fetchFormuleByExpression = async (expression) => {
     console.error('[fetchFormuleByExpression] Error:', error);
     return null;
   }
+};
+
+export const linkObjects = async ({ parentId, childIds, groupKey }) => {
+  try {
+    console.log('[linkObjects] Linking', childIds, 'to parent', parentId);
+    
+    const batch = writeBatch(db);
+    const linksRef = collection(db, 'object_links');
+    
+    for (const childId of childIds) {
+      // Use deterministic ID to prevent duplicates: link_<parent>_<child>
+      const linkId = `link_${parentId || 'root'}_${childId}`;
+      const linkRef = doc(linksRef, linkId);
+      
+      batch.set(linkRef, {
+        parent_id: parentId,
+        child_id: childId,
+        created_at: serverTimestamp(),
+        group_key: groupKey || null
+      }, { merge: true });
+    }
+    await batch.commit();
+    return { success: true };
+  } catch (error) {
+    console.error('[linkObjects] Error:', error);
+    return { success: false, message: error.message };
+  }
+};
+
+// ===== Templates =====
+
+export const fetchTemplates = async () => {
+  try {
+    console.log('[fetchTemplates] Fetching templates.');
+    const templatesRef = collection(db, 'templates');
+    const snap = await getDocs(templatesRef);
+    
+    const templates = await Promise.all(snap.docs.map(async (d) => {
+      const data = d.data();
+      let properties = data.properties || [];
+      
+      // If properties are not in the main doc (or empty), check subcollection
+      if (!properties.length) {
+          try {
+            const propsRef = collection(db, `templates/${d.id}/properties`);
+            const propsSnap = await getDocs(propsRef);
+            if (!propsSnap.empty) {
+                // Sort by index if present to preserve creation order
+                const sortedDocs = propsSnap.docs.map(doc => doc.data()).sort((a, b) => {
+                    const idxA = typeof a.index === 'number' ? a.index : 9999;
+                    const idxB = typeof b.index === 'number' ? b.index : 9999;
+                    return idxA - idxB;
+                });
+
+                properties = sortedDocs.map(pd => ({
+                    property_name: pd.name,
+                    property_value: pd.value
+                }));
+            }
+          } catch (e) {
+              console.warn('[fetchTemplates] Failed to fetch props for', d.id, e);
+          }
+      }
+      
+      return {
+        id: d.id,
+        ...data,
+        properties
+      };
+    }));
+
+    console.log('[fetchTemplates] Found', templates.length, 'templates');
+    return templates;
+  } catch (error) {
+    console.error('[fetchTemplates] Error:', error);
+    return [];
+  }
+};
+
+export const createTemplate = async (name, properties) => {
+  try {
+    const batch = writeBatch(db);
+    const templatesRef = collection(db, 'templates');
+    const newTemplateRef = doc(templatesRef);
+
+    batch.set(newTemplateRef, {
+      name,
+      created_at: serverTimestamp(),
+      updated_at: serverTimestamp(),
+    });
+
+    // Add properties to subcollection 'properties'
+    const propsSubRef = collection(db, `templates/${newTemplateRef.id}/properties`);
+    properties.forEach((prop, idx) => {
+        const newPropRef = doc(propsSubRef);
+        batch.set(newPropRef, {
+            name: prop.property_name,
+            value: prop.property_value,
+            index: idx // Save order
+        });
+    });
+
+    await batch.commit();
+    return { success: true, id: newTemplateRef.id };
+  } catch (error) {
+    console.error('[createTemplate] Error:', error);
+    return { success: false, message: error.message };
+  }
+};
+
+export const deleteTemplate = async (templateId) => {
+    try {
+        const batch = writeBatch(db);
+        
+        // Delete subcollection 'properties' first
+        const propsRef = collection(db, `templates/${templateId}/properties`);
+        const propsSnap = await getDocs(propsRef);
+        propsSnap.docs.forEach(d => {
+            batch.delete(d.ref);
+        });
+        
+        // Delete the template doc
+        const tmplRef = doc(db, 'templates', templateId);
+        batch.delete(tmplRef);
+        
+        await batch.commit();
+        return { success: true };
+    } catch (error) {
+        console.error('[deleteTemplate] Error:', error);
+        return { success: false, message: error.message };
+    }
 };

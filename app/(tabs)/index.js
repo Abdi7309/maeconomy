@@ -325,14 +325,16 @@ const App = () => {
         }
     };
 
-    const handleFetchTemplates = async () => {
+    const handleFetchTemplates = async (forceRefresh = false) => {
         try {
-            // Try cache first
-            const cached = await getCachedData('templates');
-            if (cached) {
-                console.log('[handleFetchTemplates] Using cached templates');
-                setFetchedTemplates(cached);
-                return;
+            // Try cache first unless forced
+            if (!forceRefresh) {
+                const cached = await getCachedData('templates');
+                if (cached) {
+                    console.log('[handleFetchTemplates] Using cached templates');
+                    setFetchedTemplates(cached);
+                    return;
+                }
             }
 
             // Fetch fresh data
@@ -350,7 +352,7 @@ const App = () => {
         // Ensure we wait for all refresh tasks to complete so callers can await onRefresh()
         await Promise.all([
             handleFetchObjects(true),
-            handleFetchTemplates(),
+            handleFetchTemplates(true),
             handleFetchUsers(),
         ]).catch((e) => console.warn('[onRefresh] One or more refresh tasks failed', e));
     };
@@ -639,7 +641,7 @@ const App = () => {
                         onSave={handleAddProperties}
                         onUpdate={handleUpdateProperty}
                         onLocalUpdate={handleLocalPropertyUpdate}
-                        onTemplateAdded={handleFetchTemplates}
+                        onTemplateAdded={() => handleFetchTemplates(true)}
                         onRefresh={onRefresh}
                         onFormuleSaved={handleFormuleSaved}
                         findItemByPath={findItemByPath}

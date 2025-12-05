@@ -32,7 +32,7 @@ const Row = ({ item, selected, onToggle }) => (
   </TouchableOpacity>
 );
 
-const AttachExistingObjectsModal = ({ visible, onClose, objectsHierarchy, excludeIds = [], onAttach }) => {
+const AttachExistingObjectsModal = ({ visible, onClose, objectsHierarchy, excludeIds = [], onAttach, singleSelection = false }) => {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState({}); // id -> true
 
@@ -86,7 +86,16 @@ const AttachExistingObjectsModal = ({ visible, onClose, objectsHierarchy, exclud
     return result;
   }, [uniqueAll, excludeIds, query]);
 
-  const toggle = (id) => setSelected((prev) => ({ ...prev, [id]: !prev[id] }));
+  const toggle = (id) => {
+    if (singleSelection) {
+      setSelected((prev) => {
+        const isSelected = !!prev[id];
+        return isSelected ? {} : { [id]: true };
+      });
+    } else {
+      setSelected((prev) => ({ ...prev, [id]: !prev[id] }));
+    }
+  };
 
   const submit = () => {
     const ids = Object.keys(selected).filter((id) => selected[id]);

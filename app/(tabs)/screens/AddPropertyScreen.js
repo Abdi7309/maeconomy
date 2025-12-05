@@ -278,10 +278,13 @@ const addOptimisticProperties = (objectId, props) => {
     const existing = cache.map.get(objectId) || { props: [], expires: now + cache.expiryMs };
     const mergedMap = new Map();
     // Keep existing first
-    existing.props.forEach(p => mergedMap.set(p.id || `name:${(p.name||'').toLowerCase()}`, p));
+    existing.props.forEach(p => {
+        const key = (p.id !== undefined && p.id !== null) ? p.id : `name:${(p.name||'').toLowerCase()}`;
+        mergedMap.set(key, p);
+    });
     // Add new optimistic ones
     props.forEach(p => {
-        const key = p.id || `name:${(p.name||'').toLowerCase()}`;
+        const key = (p.id !== undefined && p.id !== null) ? p.id : `name:${(p.name||'').toLowerCase()}`;
         mergedMap.set(key, { ...p, __optimistic: true, __createdAt: now });
     });
     cache.map.set(objectId, { props: Array.from(mergedMap.values()), expires: now + cache.expiryMs });
@@ -374,17 +377,26 @@ const AddPropertyScreen = ({ ...props }) => {
         
         if (!optimistic || optimistic.length === 0) return baseProps;
         
-        const existingIds = new Set(baseProps.map(p => p.id));
-        const existingNames = new Set(baseProps.map(p => p.name));
+        // Merge optimistic updates into base props
+        const mergedBase = baseProps.map(p => {
+            const opt = optimistic.find(op => op.id === p.id || (op.name === p.name && String(p.id).startsWith('temp_')));
+            return opt ? { ...p, ...opt } : p;
+        });
+
+        const existingIds = new Set(mergedBase.map(p => p.id));
+        // We only filter by name if the optimistic prop has NO ID (which shouldn't happen often)
+        // If it has an ID, we trust the ID check.
         
-        // Only add optimistic props that aren't already in the base list (by ID or Name)
-        const propsToAdd = optimistic.filter(op => 
-             !existingIds.has(op.id) && !existingNames.has(op.name)
-        );
+        // Add purely new optimistic props
+        const propsToAdd = optimistic.filter(op => {
+             if (existingIds.has(op.id)) return false;
+             // Allow duplicates to ensure new properties are shown
+             return true;
+        });
         
-        if (propsToAdd.length === 0) return baseProps;
-        
-        return [...baseProps, ...propsToAdd];
+        const combined = [...mergedBase, ...propsToAdd];
+        // Ensure everything is sorted by index
+        return combined.sort((a, b) => (a.index || 0) - (b.index || 0));
     }, [item, objectIdForProperties, existingPropertiesDraft, displayPropertiesLocalAdd]);
 
     const allUnits = ['m', 'cm', 'mm', 'm²', 'cm²', 'mm²', 'm³', 'kg', 'g', 'L', 'mL'];
@@ -452,15 +464,51 @@ const AddPropertyScreen = ({ ...props }) => {
             }
         } catch (_) {}
         
-        const draft = propsToUse.map(p => ({
-            id: p.id,
-            name: p.name,
-            waarde: p.waarde,
-            Formule_id: p.Formule_id || p.formule_id || null,
-            Formule_name: p.Formule_name || (p.formules?.name) || '',
-            Formule_expression: p.Formule_expression || p.formule || p.formules?.formule || '',
-            eenheid: p.eenheid || ''
-        }));
+        // Apply optimistic updates immediately to the draft to prevent reversion
+        const optimistic = getOptimisticProperties(item.id);
+        
+        const draft = propsToUse.map(p => {
+            // Check for optimistic override
+            const opt = optimistic.find(op => op.id === p.id || (op.name === p.name && String(p.id).startsWith('temp_')));
+            const source = opt ? { ...p, ...opt } : p;
+            
+            return {
+                id: source.id,
+                name: source.name,
+                waarde: source.waarde,
+                Formule_id: source.Formule_id || source.formule_id || null,
+                Formule_name: source.Formule_name || (source.formules?.name) || '',
+                Formule_expression: source.Formule_expression || source.formule || source.formules?.formule || '',
+                eenheid: source.eenheid || '',
+                index: source.index !== undefined ? source.index : 9999
+            };
+        });
+        
+        // Also append new optimistic properties that are not in propsToUse
+        const existingIds = new Set(draft.map(p => p.id));
+        
+        optimistic.forEach(op => {
+            // If ID exists, skip
+            if (existingIds.has(op.id)) return;
+            
+            // We allow duplicates now to prevent hiding valid new properties
+            // The risk of temporary duplicates is better than hiding data
+
+            draft.push({
+                id: op.id,
+                name: op.name,
+                waarde: op.waarde,
+                Formule_id: op.Formule_id || null,
+                Formule_name: '',
+                Formule_expression: op.Formule_expression || '',
+                eenheid: op.eenheid || '',
+                index: op.index !== undefined ? op.index : 9999
+            });
+        });
+
+        // Sort by index to maintain order
+        draft.sort((a, b) => (a.index || 0) - (b.index || 0));
+
         setExistingPropertiesDraft(draft);
         setDisplayPropertiesLocalAdd(propsToUse);
     }, [item, deletionNotifier]);
@@ -715,10 +763,15 @@ const AddPropertyScreen = ({ ...props }) => {
     };
 
     const handleSaveOnBack = async () => {
+        // Calculate starting index based on existing properties
+        const existingCount = (existingPropertiesDraft && existingPropertiesDraft.length) 
+            ? existingPropertiesDraft.length 
+            : (item.properties ? item.properties.length : 0);
+
         // Build properties to save (same logic as before)
         const propertiesToSave = newPropertiesList
             .filter(prop => prop.name.trim() !== '')
-            .map(prop => {
+            .map((prop, i) => {
                 const isFormule = prop.Formule_expression && prop.Formule_expression.trim() !== '';
                 let finalValue = prop.value;
                 let rawFormule = '';
@@ -733,6 +786,7 @@ const AddPropertyScreen = ({ ...props }) => {
                 return {
                     ...prop,
                     waarde: String(roundToDecimals(finalValue || 0)),
+                    index: existingCount + i // Add index here
                 };
             });
 
@@ -941,12 +995,16 @@ const AddPropertyScreen = ({ ...props }) => {
 
     // Helper to build a map from existing properties (for edit preview)
     const buildExistingPropertiesMap = (outputUnit) => {
-        const propsList = (existingPropertiesDraft || []).map(p => ({
+        const source = (existingPropertiesDraft && existingPropertiesDraft.length)
+            ? existingPropertiesDraft
+            : (displayPropertiesLocalAdd !== null ? displayPropertiesLocalAdd : (item.properties || []));
+
+        const propsList = (source || []).map(p => ({
             name: p.name,
             value: p.formule && /[+\-*/]/.test(p.formule)
                 ? (() => {
                     // Evaluate nested Formules within the draft first
-                    const innerMap = buildPropertiesMap(existingPropertiesDraft.map(x => ({ name: x.name, value: x.waarde, unit: x.eenheid || '' })), p.eenheid || outputUnit);
+                    const innerMap = buildPropertiesMap(source.map(x => ({ name: x.name, value: x.waarde, unit: x.eenheid || '' })), p.eenheid || outputUnit);
                     const { value: innerVal, error: innerErr } = evaluateFormule(p.formule, innerMap);
                     return innerErr ? 'Error' : String(innerVal);
                 })()
@@ -993,8 +1051,8 @@ const AddPropertyScreen = ({ ...props }) => {
                     if (templateId && props.fetchedTemplates[templateId]) {
                         const templateProps = props.fetchedTemplates[templateId].properties.map((prop, index) => ({
                             id: index,
-                            name: prop.name,
-                            value: prop.value || '',
+                            name: prop.property_name || prop.name,
+                            value: prop.property_value || prop.value || '',
                             unit: prop.unit || '', 
                             files: []
                         }));
@@ -1213,10 +1271,16 @@ const AddPropertyScreen = ({ ...props }) => {
                             onClose={() => setShowEditModal(false)}
                             objectId={item.id}
                             property={displayProperties[modalPropertyIndex]}
-                            existingPropertiesDraft={existingPropertiesDraft}
+                            existingPropertiesDraft={(existingPropertiesDraft && existingPropertiesDraft.length) 
+                                ? existingPropertiesDraft 
+                                : (displayPropertiesLocalAdd !== null ? displayPropertiesLocalAdd : (item.properties || []))}
                             onSaved={async (updated) => {
                                 const idx = modalPropertyIndex;
-                                const originalDraft = [...existingPropertiesDraft]; // Capture state before changes
+                                // Fix: Ensure we edit the list that is actually displayed (fallback to item.properties if draft is empty)
+                                const currentBase = (existingPropertiesDraft && existingPropertiesDraft.length)
+                                    ? existingPropertiesDraft
+                                    : (displayPropertiesLocalAdd !== null ? displayPropertiesLocalAdd : (item.properties || []));
+                                const originalDraft = [...currentBase]; // Capture state before changes
 
                                 if (updated && updated.__deleted) {
                                     // Immediate UI removal of the deleted property

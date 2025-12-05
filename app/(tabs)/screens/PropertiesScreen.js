@@ -179,9 +179,18 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
             const cache = g.__tempPropertiesCache?.map;
             const resolutionMap = g.__tempObjectResolutionMap; // Map(tempId -> dbId)
 
-            // Helper: sorteren op id (numeriek), daarna fallback op naam
-            const sortPropsById = (arr) => {
+            // Helper: sorteren op index (indien aanwezig), anders op id (numeriek), daarna fallback op naam
+            const sortPropsByIndex = (arr) => {
                 return [...arr].sort((a, b) => {
+                    // 1. Sorteer op index als beide het hebben
+                    if (a.index !== undefined && b.index !== undefined) {
+                        return a.index - b.index;
+                    }
+                    // Als één index heeft, komt die eerst (of laatst? meestal eerst)
+                    if (a.index !== undefined) return -1;
+                    if (b.index !== undefined) return 1;
+
+                    // 2. Fallback: ID
                     const parseId = (val) => {
                         if (val === null || val === undefined) return Number.POSITIVE_INFINITY;
                         const n = parseInt(val, 10);
@@ -193,7 +202,7 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
 
                     if (aId !== bId) return aId - bId;
 
-                    // Fallback: sorteer op naam als ids gelijk / geen geldige id
+                    // 3. Fallback: Naam
                     return String(a.name || '').localeCompare(
                         String(b.name || ''),
                         undefined,
@@ -202,19 +211,19 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
                 });
             };
 
-            // Geen cache? Dan gewoon DB-properties sorteren op id
+            // Geen cache? Dan gewoon DB-properties sorteren
             if (!cache || !cache.has(objectId)) {
-                return sortPropsById(base);
+                return sortPropsByIndex(base);
             }
 
             const now = Date.now();
             const entry = cache.get(objectId);
-            if (!entry || !Array.isArray(entry.props)) return sortPropsById(base);
+            if (!entry || !Array.isArray(entry.props)) return sortPropsByIndex(base);
 
             // Filter expired optimistic props
             if (entry.expires < now) {
                 cache.delete(objectId);
-                return sortPropsById(base);
+                return sortPropsByIndex(base);
             }
 
             // Build map keyed by ID first, then fallback to name for matching
@@ -343,7 +352,7 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
             });
 
             const merged = Array.from(mergedMap.values());
-            return sortPropsById(merged);
+            return sortPropsByIndex(merged);
         } catch (e) {
             console.warn('[PropertiesScreen] merge failed', e);
             return Array.isArray(item?.properties) ? item.properties : [];
