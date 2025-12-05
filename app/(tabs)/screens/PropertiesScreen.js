@@ -1,14 +1,19 @@
+import { getDownloadURL, ref } from 'firebase/storage';
 import { ChevronLeft, File, FileImage, FileText, Paperclip, Plus, Tag, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import { Image, Linking, Modal, RefreshControl, ScrollView, StatusBar, Text, TouchableOpacity, View } from 'react-native';
 import AppStyles, { colors } from '../AppStyles';
-import { supabase } from '../config/config';
+import { storage } from '../config/firebase';
 
 const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onRefresh, refreshing, fallbackTempItem, activeTempObjects }) => {
     
     // --- NEW: State for the image modal ---
     const [modalVisible, setModalVisible] = useState(false);
     const [selectedImageUrl, setSelectedImageUrl] = useState(null);
+    // State to trigger rebuild when properties are deleted from other screens
+    const [deletionNotifier, setDeletionNotifier] = useState(0);
+    // Local state copy of properties for reactive updates
+    const [displayPropertiesLocal, setDisplayPropertiesLocal] = useState(null);
 
     const objectId = currentPath[currentPath.length - 1];
 
@@ -18,6 +23,25 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
             onRefresh();
         }
     }, [objectId]);
+
+    // Listen to deletion events from EditPropertyModal
+    useEffect(() => {
+        const handleDeletion = () => {
+            console.log('[PropertiesScreen] Deletion detected, triggering rebuild');
+            setDeletionNotifier(n => n + 1); // Trigger a rebuild
+        };
+        
+        try {
+            const g = globalThis;
+            g.__propertyDeletionListeners = g.__propertyDeletionListeners || [];
+            g.__propertyDeletionListeners.push(handleDeletion);
+            
+            return () => {
+                // Cleanup listener
+                g.__propertyDeletionListeners = g.__propertyDeletionListeners.filter(l => l !== handleDeletion);
+            };
+        } catch (_) {}
+    }, []);
 
     const findItemByPath = (data, path) => {
         let currentItems = data;
@@ -60,6 +84,43 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
         return <View style={[AppStyles.screen, { justifyContent: 'center', alignItems: 'center' }]}><Text style={AppStyles.emptyStateText}>Item not found...</Text></View>;
     }
 
+    // Initialize global cache for this item so deletions can be tracked locally
+    useEffect(() => {
+        if (item?.id) {
+            const g = globalThis;
+            g.__currentObjectItems = g.__currentObjectItems || {};
+            // Only initialize if not present to avoid overwriting deletions with stale props
+            if (!g.__currentObjectItems[item.id]) {
+                g.__currentObjectItems[item.id] = { ...item };
+                console.log('[PropertiesScreen] Initialized global cache for:', item.id);
+            }
+        }
+    }, [item?.id]);
+
+    // Combined effect to initialize and sync properties
+    useEffect(() => {
+        if (!item) {
+            setDisplayPropertiesLocal([]);
+            return;
+        }
+
+        let propsToUse = Array.isArray(item.properties) ? item.properties : [];
+
+        // Check global cache for updates (e.g. after deletion)
+        try {
+            const g = globalThis;
+            if (g.__currentObjectItems && g.__currentObjectItems[item.id]) {
+                const cachedItem = g.__currentObjectItems[item.id];
+                if (Array.isArray(cachedItem.properties)) {
+                    propsToUse = cachedItem.properties;
+                    console.log('[PropertiesScreen] Using cached properties for object:', item.id, 'count:', propsToUse.length);
+                }
+            }
+        } catch (_) {}
+
+        setDisplayPropertiesLocal(propsToUse);
+    }, [item, deletionNotifier]);
+
     const renderIcon = (customColor = colors.lightGray500) => {
         return <Tag color={customColor} size={20} />;
     };
@@ -77,21 +138,26 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
     };
 
     // --- NEW: Function to handle opening a file ---
-    const handleOpenFile = (file) => {
-        // Get public URL from Supabase Storage
-        const { data } = supabase.storage
-            .from('property-files')
-            .getPublicUrl(file.file_path);
-        
-        const fileUrl = data.publicUrl;
+    const handleOpenFile = async (file) => {
+        try {
+            // Get download URL from Firebase Storage
+            const fileRef = ref(storage, file.url || file.file_path);
+            const fileUrl = await getDownloadURL(fileRef);
 
-        if (file.file_type && file.file_type.startsWith('image/')) {
-            // If it's an image, open it in the modal
-            setSelectedImageUrl(fileUrl);
-            setModalVisible(true);
-        } else {
-            // For other files, open in a new tab/browser
-            Linking.openURL(fileUrl);
+            if (file.file_type && file.file_type.startsWith('image/')) {
+                // If it's an image, open it in the modal
+                setSelectedImageUrl(fileUrl);
+                setModalVisible(true);
+            } else {
+                // For other files, open in a new tab/browser
+                Linking.openURL(fileUrl);
+            }
+        } catch (error) {
+            console.error('[PropertiesScreen] Error opening file:', error);
+            // Fallback: try direct URL if available
+            if (file.url) {
+                Linking.openURL(file.url);
+            }
         }
     };
 
@@ -99,7 +165,10 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
     const buildMergedProperties = () => {
         try {
             if (!item) return [];
-            const base = Array.isArray(item.properties) ? [...item.properties] : [];
+            
+            const base = displayPropertiesLocal !== null
+                ? [...displayPropertiesLocal] 
+                : (Array.isArray(item.properties) ? [...item.properties] : []);
             const g = globalThis;
             const cache = g.__tempPropertiesCache?.map;
             const resolutionMap = g.__tempObjectResolutionMap; // Map(tempId -> dbId)

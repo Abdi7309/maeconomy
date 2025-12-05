@@ -1,15 +1,8 @@
-import { createClient } from '@supabase/supabase-js';
-
-// Supabase project configuration
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://lasqujeicadwlfdmvgrx.supabase.co'
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'your-anon-key'
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+// Firebase configuration is now in config/firebase.js
+// This file kept for backwards compatibility if needed elsewhere
 
 const CONFIG = {
-    // Keep for any other non-API related configurations
-    SUPABASE_URL: supabaseUrl,
-    SUPABASE_ANON_KEY: supabaseAnonKey,
+    // Non-Firebase configs can be added here if needed
 };
 
 export default CONFIG;

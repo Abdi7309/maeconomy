@@ -120,10 +120,10 @@ const SummaryModal = (props) => {
         return _parseNumeric(String(raw));
     };
 
-    // Include in flow aggregation: raw_material, intermediate, component, final_product, and null
+    // Include in flow aggregation: raw_material, intermediate, component, final_product, and null/default
     const _includeInFlow = (node) => {
         const t = node?.material_flow_type;
-        return isAllowedFlowType(t) || t === 'final_product' || t == null;
+        return isAllowedFlowType(t) || t === 'final_product' || t === 'default' || t == null;
     };
 
     const _ownPropsMap = (node) => {
@@ -762,12 +762,12 @@ const SummaryModal = (props) => {
                                             <Text style={{ fontWeight: '700', marginBottom: 8 }}>Sub-items (Processtroom)</Text>
                                             {currentNode && Array.isArray(currentNode.children) && currentNode.children.length > 0 ? (
                                                 <FlatList
-                                                    data={[...buildGroupedList(
+                                                    data={buildGroupedList(
                                                         (currentNode.children || []).filter((ch) => {
                                                             const t = ch?.material_flow_type;
-                                                            return isAllowedFlowType(t) || t === 'final_product' || t == null;
+                                                            return isAllowedFlowType(t) || t === 'final_product' || t === 'default' || t == null;
                                                         })
-                                                    )].reverse().slice(0, rightPage * rightPageSize)}
+                                                    ).slice(0, rightPage * rightPageSize)}
                                                     keyExtractor={(item, idx) => item.type === 'sep' ? item.id : (item.item?.id || `${item.type}-${idx}`)}
                                                     renderItem={({ item }) => {
                                                         if (item.type === 'sep') return <View key={item.id} style={{ height: 1, backgroundColor: colors.lightGray200, marginVertical: 6 }} />;
@@ -813,7 +813,7 @@ const SummaryModal = (props) => {
                                                     ListFooterComponent={() => (
                                                         (((currentNode.children || []).filter((ch) => {
                                                             const t = ch?.material_flow_type;
-                                                            return isAllowedFlowType(t) || t === 'final_product' || t == null;
+                                                            return isAllowedFlowType(t) || t === 'final_product' || t === 'default' || t == null;
                                                         }).length) > (rightPage * rightPageSize)) ? (
                                                             <TouchableOpacity onPress={() => setRightPage && setRightPage((p) => (p || 1) + 1)} style={{ padding: 10, alignItems: 'center' }}>
                                                                 <Text style={{ color: colors.blue600 }}>Load more</Text>

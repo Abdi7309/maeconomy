@@ -1,4 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, View } from 'react-native';
 import {
@@ -6,16 +8,11 @@ import {
     addProperties as apiAddProperties,
     fetchAndSetAllObjects as apiFetchObjects,
     fetchTemplates as apiFetchTemplates,
-    supabaseLogin as apiLogin,
-    supabaseLogout as apiLogout,
-    supabaseRegister as apiRegister,
     updateProperty as apiUpdateProperty,
     fetchAllUsers,
-    getCurrentSession,
-    getCurrentUser
-} from './api';
+} from '../../lib/api';
 import AppStyles, { colors } from './AppStyles';
-import { supabase } from './config/config';
+import { auth, db } from './config/firebase';
 import AddPropertyScreen from './screens/AddPropertyScreen';
 import AuthScreen from './screens/AuthScreen';
 import HierarchicalObjectsScreen from './screens/HierarchicalObjectsScreen';
@@ -47,54 +44,63 @@ const App = () => {
     // Persistent store for active temp objects across screen transitions (e.g. objects -> properties -> objects)
     const activeTempObjectsRef = useRef([]);
 
-    // Initialize app state and check for Supabase session
+    // Initialize app state and listen for Firebase auth state
     useEffect(() => {
-        const initializeApp = async () => {
+        let firstRun = true;
+        const unsubscribe = onAuthStateChanged(auth, async (user) => {
             try {
-                // Get current Supabase session
-                const currentSession = await getCurrentSession();
-                
-                if (currentSession) {
-                    console.log('[initializeApp] Found active Supabase session');
-                    
-                    // Get user data
-                    const userData = await getCurrentUser();
-                    
-                    if (userData && userData.user) {
-                        setSession(currentSession);
-                        setCurrentUser(userData.user);
-                        setUserToken(userData.user.id);
-                        setCurrentView('app');
-                        setFilterOption('all');
-                        console.log('[initializeApp] User authenticated:', userData.user.email);
+                if (user) {
+                    // Firebase user is signed in
+                    setSession(user);
+                    setCurrentUser(user);
+                    setUserToken(user.uid);
+                    setCurrentView('app');
+                    setFilterOption('all');
+                    console.log('[Auth] Firebase user signed in:', user.email);
+
+                    // 1. Special migration for your specific account (Old ID -> New Auth UID)
+                    if (user.uid === 'U9WVtQJVuyas0L9W9u7uv6vF9Cv1') {
+                        try {
+                            const oldProfileRef = doc(db, 'profiles', '2d2ba66c-6a65-4ba2-92e0-bccaece24809');
+                            const oldProfileSnap = await getDoc(oldProfileRef);
+                            
+                            if (oldProfileSnap.exists()) {
+                                const oldData = oldProfileSnap.data();
+                                const currentProfileRef = doc(db, 'profiles', user.uid);
+                                
+                                // Always update/overwrite with old profile data to ensure it's correct
+                                await setDoc(currentProfileRef, {
+                                    email: user.email,
+                                    username: oldData.username || user.email.split('@')[0],
+                                    full_name: oldData.full_name || '',
+                                    updated_at: serverTimestamp()
+                                }, { merge: true });
+                                console.log('[Auth] Migrated old profile data to new UID');
+                            }
+                        } catch (err) {
+                            console.warn('[Auth] Migration error:', err);
+                        }
+                    }
+
+                    // 2. Standard check: Ensure profile exists for any user
+                    try {
+                        const profileRef = doc(db, 'profiles', user.uid);
+                        const profileSnap = await getDoc(profileRef);
+                        if (!profileSnap.exists()) {
+                            console.log('[Auth] Profile missing for UID, creating new one...');
+                            await setDoc(profileRef, {
+                                email: user.email,
+                                username: user.displayName || user.email.split('@')[0],
+                                created_at: serverTimestamp(),
+                                updated_at: serverTimestamp()
+                            });
+                            console.log('[Auth] Created missing profile for', user.uid);
+                        }
+                    } catch (profileErr) {
+                        console.warn('[Auth] Failed to check/create profile:', profileErr);
                     }
                 } else {
-                    console.log('[initializeApp] No active session found');
-                }
-            } catch (error) {
-                console.error('[initializeApp] Error checking Supabase session:', error);
-            } finally {
-                setIsAppLoading(false);
-            }
-        };
-        
-        initializeApp();
-
-        // Listen for auth state changes
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(
-            async (event, session) => {
-                console.log('[AuthStateChange] Event:', event, 'Session:', !!session);
-                
-                if (event === 'SIGNED_IN' && session) {
-                    const userData = await getCurrentUser();
-                    if (userData && userData.user) {
-                        setSession(session);
-                        setCurrentUser(userData.user);
-                        setUserToken(userData.user.id);
-                        setCurrentView('app');
-                        setFilterOption('all');
-                    }
-                } else if (event === 'SIGNED_OUT') {
+                    // Signed out
                     setSession(null);
                     setCurrentUser(null);
                     setUserToken(null);
@@ -106,13 +112,20 @@ const App = () => {
                     setCurrentScreen('objects');
                     setCurrentPath([]);
                     setFilterOption(null);
+                    console.log('[Auth] No Firebase user');
+                }
+            } catch (e) {
+                console.error('[Auth] onAuthStateChanged handler error:', e);
+            } finally {
+                // Ensure initial loading state is cleared after first callback
+                if (firstRun) {
+                    setIsAppLoading(false);
+                    firstRun = false;
                 }
             }
-        );
+        });
 
-        return () => {
-            subscription?.unsubscribe();
-        };
+        return () => unsubscribe();
     }, []);
 
     // Fetch data when user is logged in - load in parallel for better performance
@@ -160,46 +173,52 @@ const App = () => {
     const handleLogin = async (email, password) => {
         setIsLoading(true);
         setAuthError('');
-        const result = await apiLogin(email, password);
-        if (result && result.success) {
-            // Supabase Auth will handle session management automatically
-            // The auth state change listener will update our state
-            console.log('[handleLogin] Login successful for:', email);
-        } else {
-            setAuthError(result ? result.message : 'An error occurred during login.');
+        try {
+            await signInWithEmailAndPassword(auth, email, password);
+            console.log('[handleLogin] Firebase sign-in successful for:', email);
+            // onAuthStateChanged will update app state
+        } catch (err) {
+            console.error('[handleLogin] Firebase sign-in error:', err);
+            setAuthError(err?.message || 'An error occurred during login.');
+        } finally {
+            setIsLoading(false);
         }
-        setIsLoading(false);
     };
     
     const handleRegister = async (email, password, username) => {
         setIsLoading(true);
         setAuthError('');
-        const result = await apiRegister(email, password, username);
-        if (result && result.success) {
-            if (result.needsConfirmation) {
-                Alert.alert(
-                    'Check Your Email', 
-                    'We sent you a confirmation link. Please check your email and click the link to confirm your account.',
-                    [{ text: 'OK', onPress: () => setCurrentView('login') }]
-                );
-            } else {
-                Alert.alert('Registration Successful', 'Account created successfully!');
-                // Auth state change will handle the login automatically
+        try {
+            const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+            const uid = userCredential.user.uid;
+            // Create a minimal profile document in Firestore
+            try {
+                await setDoc(doc(db, 'profiles', uid), {
+                    email,
+                    username: username || null,
+                    created_at: serverTimestamp()
+                });
+                console.log('[handleRegister] Created profile for', uid);
+            } catch (profileErr) {
+                console.warn('[handleRegister] Failed to create profile doc:', profileErr);
             }
-        } else {
-            setAuthError(result ? result.message : 'An error occurred during registration.');
+
+            Alert.alert('Registration Successful', 'Account created successfully!');
+            // onAuthStateChanged will update the app state
+        } catch (err) {
+            console.error('[handleRegister] Firebase sign-up error:', err);
+            setAuthError(err?.message || 'An error occurred during registration.');
+        } finally {
+            setIsLoading(false);
         }
-        setIsLoading(false);
     };
 
     const handleLogout = async () => {
         try {
             console.log('[handleLogout] Logout button pressed');
-            
-            // Show loading state
             setIsLoading(true);
-            
-            // Clear state immediately for better UX
+
+            // Clear local state immediately for better UX
             setSession(null);
             setCurrentUser(null);
             setUserToken(null);
@@ -210,22 +229,13 @@ const App = () => {
             setCurrentScreen('objects');
             setCurrentPath([]);
             setFilterOption(null);
-            
-            // Call logout API in background
-            const success = await apiLogout();
-            
-            if (!success) {
-                console.warn('[handleLogout] Logout API call failed, but state cleared locally');
-                // Don't show error - user is already logged out from UI perspective
-            } else {
-                console.log('[handleLogout] Logout API call successful');
-            }
-            
+
+            // Sign out from Firebase
+            await signOut(auth);
+            console.log('[handleLogout] Firebase sign-out successful');
         } catch (error) {
             console.error('[handleLogout] Error during logout:', error);
-            // Don't show error alert - user is already logged out from UI perspective
         } finally {
-            // Ensure loading is always cleared
             setIsLoading(false);
         }
     };

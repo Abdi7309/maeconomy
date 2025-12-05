@@ -5,7 +5,6 @@
 import { Calculator } from 'lucide-react-native';
 import { Platform, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { colors } from '../AppStyles';
-
 // Format numbers using Dutch-style separators: thousands '.' and decimals ','
 function formatNumber(value, maxDecimals = 6) {
   try {

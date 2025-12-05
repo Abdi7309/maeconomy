@@ -1,9 +1,9 @@
-import * as DocumentPicker from 'expo-document-picker';
-import * as ImagePicker from 'expo-image-picker';
+
+import * as DocumentPicker from 'expo-document-picker';import * as ImagePicker from 'expo-image-picker';
 import { ChevronLeft, FileText, Paperclip, Plus, Tag, X } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, ScrollView, StatusBar, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { fetchFormules as fetchFormulesApi } from '../api';
+import { fetchFormules as fetchFormulesApi } from '../../../lib/api';
 import AppStyles, { colors } from '../AppStyles';
 import AddTemplateModal from '../components/modals/AddTemplateModal';
 import EditPropertyModal from '../components/modals/EditPropertyModal';
@@ -239,6 +239,10 @@ const AddPropertyScreen = ({ ...props }) => {
     // ValueInputModal state
     const [showValueInputModal, setShowValueInputModal] = useState(false);
     const [valueInputPropertyId, setValueInputPropertyId] = useState(null);
+    // State to trigger rebuild when properties are deleted from other screens
+    const [deletionNotifier, setDeletionNotifier] = useState(0);
+    // Local state copy of properties for reactive updates
+    const [displayPropertiesLocalAdd, setDisplayPropertiesLocalAdd] = useState(null);
 
     const webInputRef = useRef(null);
 
@@ -265,13 +269,29 @@ const AddPropertyScreen = ({ ...props }) => {
 
     if (!item) return null;
 
-    // Merge optimistic properties from global cache to ensure they are visible even if DB sync lags
+    // Initialize global cache for this item so deletions can be tracked locally
+    useEffect(() => {
+        if (item?.id) {
+            const g = globalThis;
+            g.__currentObjectItems = g.__currentObjectItems || {};
+            // Only initialize if not present to avoid overwriting deletions with stale props
+            if (!g.__currentObjectItems[item.id]) {
+                g.__currentObjectItems[item.id] = { ...item };
+                console.log('[AddPropertyScreen] Initialized global cache for:', item.id);
+            }
+        }
+    }, [item?.id]);
+
+    // Merge optimistic properties from global cache to ensure they are visible even if DB sync lags.
+    // We use existingPropertiesDraft as the primary source so edits are reflected immediately without refresh.
     const displayProperties = useMemo(() => {
-        const baseProps = item.properties || [];
+        const baseProps = (existingPropertiesDraft && existingPropertiesDraft.length)
+            ? existingPropertiesDraft
+            : (displayPropertiesLocalAdd !== null ? displayPropertiesLocalAdd : (item.properties || []));
         const optimistic = getOptimisticProperties(objectIdForProperties);
         
         if (!optimistic || optimistic.length === 0) return baseProps;
-
+        
         const existingIds = new Set(baseProps.map(p => p.id));
         const existingNames = new Set(baseProps.map(p => p.name));
         
@@ -283,7 +303,7 @@ const AddPropertyScreen = ({ ...props }) => {
         if (propsToAdd.length === 0) return baseProps;
         
         return [...baseProps, ...propsToAdd];
-    }, [item, objectIdForProperties]);
+    }, [item, objectIdForProperties, existingPropertiesDraft, displayPropertiesLocalAdd]);
 
     const allUnits = ['m', 'cm', 'mm', 'm²', 'cm²', 'mm²', 'm³', 'kg', 'g', 'L', 'mL'];
 
@@ -294,8 +314,6 @@ const AddPropertyScreen = ({ ...props }) => {
         const factor = Math.pow(10, decimals);
         return Math.round(value * factor) / factor;
     };
-
-
 
     // Fetch Formules for ValueInputModal
     useEffect(() => {
@@ -310,10 +328,49 @@ const AddPropertyScreen = ({ ...props }) => {
         })();
     }, []);
 
-    // Initialize or refresh the draft when displayProperties changes
+    // Listen to deletion events from EditPropertyModal
     useEffect(() => {
-        // Preserve formula expressions even if only available via nested relation (formules.formule)
-        const draft = displayProperties.map(p => ({
+        const handleDeletion = () => {
+            console.log('[AddPropertyScreen] Deletion detected, triggering rebuild');
+            setDeletionNotifier(n => n + 1); // Trigger a rebuild
+        };
+        
+        try {
+            const g = globalThis;
+            g.__propertyDeletionListeners = g.__propertyDeletionListeners || [];
+            g.__propertyDeletionListeners.push(handleDeletion);
+            
+            return () => {
+                // Cleanup listener
+                g.__propertyDeletionListeners = g.__propertyDeletionListeners.filter(l => l !== handleDeletion);
+            };
+        } catch (_) {}
+    }, []);
+
+    // Initialize or refresh the draft when the underlying item changes (e.g. navigating to another object).
+    // We intentionally do NOT depend on displayProperties here to avoid overriding local edits.
+    useEffect(() => {
+        if (!item) {
+            setExistingPropertiesDraft([]);
+            setDisplayPropertiesLocalAdd([]);
+            return;
+        }
+        
+        let propsToUse = Array.isArray(item.properties) ? item.properties : [];
+
+        // Sync from global cache when a deletion occurs
+        try {
+            const g = globalThis;
+            if (g.__currentObjectItems && g.__currentObjectItems[item.id]) {
+                const cachedItem = g.__currentObjectItems[item.id];
+                if (Array.isArray(cachedItem.properties)) {
+                    propsToUse = cachedItem.properties;
+                    console.log('[AddPropertyScreen] Using cached properties for object:', item.id, 'count:', propsToUse.length);
+                }
+            }
+        } catch (_) {}
+        
+        const draft = propsToUse.map(p => ({
             id: p.id,
             name: p.name,
             waarde: p.waarde,
@@ -323,7 +380,8 @@ const AddPropertyScreen = ({ ...props }) => {
             eenheid: p.eenheid || ''
         }));
         setExistingPropertiesDraft(draft);
-    }, [displayProperties]);
+        setDisplayPropertiesLocalAdd(propsToUse);
+    }, [item, deletionNotifier]);
 
     const addNewPropertyField = () => {
         setNewPropertiesList(prevList => {
@@ -339,8 +397,6 @@ const AddPropertyScreen = ({ ...props }) => {
             return [...prevList, newField];
         });
     };
-
-
 
     const handleOpenValueInput = async (propertyId) => {
         setValueInputPropertyId(propertyId);
@@ -576,8 +632,6 @@ const AddPropertyScreen = ({ ...props }) => {
         }));
     };
 
-
-
     const handleSaveOnBack = async () => {
         // Build properties to save (same logic as before)
         const propertiesToSave = newPropertiesList
@@ -633,8 +687,6 @@ const AddPropertyScreen = ({ ...props }) => {
                 eenheid: tp.eenheid || ''
             }))
         ]);
-
-    // (already cached above)
 
         // Clear new form fields and navigate back instantly
         setNewPropertiesList([]);
@@ -807,7 +859,7 @@ const AddPropertyScreen = ({ ...props }) => {
 
     // Helper to build a map from existing properties (for edit preview)
     const buildExistingPropertiesMap = (outputUnit) => {
-        const props = (existingPropertiesDraft || []).map(p => ({
+        const propsList = (existingPropertiesDraft || []).map(p => ({
             name: p.name,
             value: p.formule && /[+\-*/]/.test(p.formule)
                 ? (() => {
@@ -819,12 +871,12 @@ const AddPropertyScreen = ({ ...props }) => {
                 : p.waarde,
             unit: p.eenheid || ''
         }));
-        return buildPropertiesMap(props, outputUnit);
+        return buildPropertiesMap(propsList, outputUnit);
     };
 
     // Draft-parameterized variant for recomputation after modal save
     const buildExistingPropertiesMapFromDraft = (draft, outputUnit) => {
-        const props = (draft || []).map(p => ({
+        const propsList = (draft || []).map(p => ({
             name: p.name,
             value: p.formule && /[+\-*/]/.test(p.formule)
                 ? (() => {
@@ -835,10 +887,8 @@ const AddPropertyScreen = ({ ...props }) => {
                 : p.waarde,
             unit: p.eenheid || ''
         }));
-        return buildPropertiesMap(props, outputUnit);
+        return buildPropertiesMap(propsList, outputUnit);
     };
-
-    // (Removed old local fetchFormules using wrong endpoint path)
 
     return (
         <View style={[AppStyles.screen, { backgroundColor: colors.white, flex: 1 }]}>
@@ -913,157 +963,157 @@ const AddPropertyScreen = ({ ...props }) => {
                                     <View key={index} style={[AppStyles.propertyItem, { marginBottom: 12 }]}>
                                         <View style={{ width: '100%' }}>
                                             <View
-                                            style={{
-                                                flexDirection: 'row',
-                                                justifyContent: 'space-between',
-                                                alignItems: 'center',
-                                            }}
+                                                style={{
+                                                    flexDirection: 'row',
+                                                    justifyContent: 'space-between',
+                                                    alignItems: 'center',
+                                                }}
                                             >
-                                            {/* Left Side */}
-                                            <View
-                                                style={[
-                                                AppStyles.propertyItemMain,
-                                                { flexDirection: 'row', alignItems: 'center' },
-                                                ]}
-                                            >
-                                                <Tag color={colors.lightGray500} size={20} />
-                                                <Text style={[AppStyles.propertyName, { marginLeft: 8 }]}>{prop.name}</Text>
-                                            </View>
+                                                {/* Left Side */}
+                                                <View
+                                                    style={[
+                                                        AppStyles.propertyItemMain,
+                                                        { flexDirection: 'row', alignItems: 'center' },
+                                                    ]}
+                                                >
+                                                    <Tag color={colors.lightGray500} size={20} />
+                                                    <Text style={[AppStyles.propertyName, { marginLeft: 8 }]}>{prop.name}</Text>
+                                                </View>
 
-                                            {/* Right Side */}
-                                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                                <View style={{ alignItems: 'flex-end' }}>
-                                                {(() => {
-                                                    const formulaExpr = (prop.Formule_expression && String(prop.Formule_expression))
-                                                        || (prop.formule && String(prop.formule))
-                                                        || (prop.formules && prop.formules.formule && String(prop.formules.formule))
-                                                        || '';
-                                                    const isFormula = formulaExpr.trim() !== '' && /[+\-*/()x×]/.test(formulaExpr) && !/^\d+\.?\d*[a-zA-Z]*$/.test(formulaExpr.trim());
-                                                    return isFormula;
-                                                })() && (
-                                                    <>
-                                                        <Text
-                                                            style={{
-                                                                color: colors.lightGray500,
-                                                                fontSize: 13,
-                                                                fontStyle: 'italic',
-                                                            }}
-                                                        >
-                                                            {(() => {
-                                                                const formulaExpr = (prop.Formule_expression && String(prop.Formule_expression))
-                                                                    || (prop.formule && String(prop.formule))
-                                                                    || (prop.formules && prop.formules.formule && String(prop.formules.formule))
-                                                                    || '';
-                                                                return formulaExpr;
-                                                            })()}
-                                                        </Text>
+                                                {/* Right Side */}
+                                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                                    <View style={{ alignItems: 'flex-end' }}>
                                                         {(() => {
-                                                            // Create combined properties list for formula evaluation
-                                                            const allProperties = [
-                                                            ...displayProperties.map((p) => ({
-                                                                name: p.name,
-                                                                value: p.waarde,
-                                                                unit: p.eenheid || '',
-                                                            })),
-                                                            ...newPropertiesList.map((p) => ({
-                                                                name: p.name,
-                                                                value: p.value,
-                                                                unit: p.unit || '',
-                                                            })),
-                                                            ];
                                                             const formulaExpr = (prop.Formule_expression && String(prop.Formule_expression))
                                                                 || (prop.formule && String(prop.formule))
                                                                 || (prop.formules && prop.formules.formule && String(prop.formules.formule))
                                                                 || '';
-                                                            const normalizedExpr = formulaExpr.replace(/[x×]/g, '*');
-                                                            const evaluation = evaluateFormule(normalizedExpr, allProperties);
-                                                            if (evaluation.error) {
-                                                                return (
-                                                                    <Text style={{
-                                                                        color: colors.red500,
-                                                                        fontSize: 12,
+                                                            const isFormula = formulaExpr.trim() !== '' && /[+\-*/()x×]/.test(formulaExpr) && !/^\d+\.?\d*[a-zA-Z]*$/.test(formulaExpr.trim());
+                                                            return isFormula;
+                                                        })() && (
+                                                            <>
+                                                                <Text
+                                                                    style={{
+                                                                        color: colors.lightGray500,
+                                                                        fontSize: 13,
                                                                         fontStyle: 'italic',
-                                                                    }}>
-                                                                        {evaluation.error}
-                                                                    </Text>
-                                                                );
-                                                            } else {
-                                                                // Align display logic with new property preview: convert only when appropriate
-                                                                const hasMulDiv = /[*/]/.test(normalizedExpr);
-                                                                let v = evaluation.value;
-                                                                const u = prop.eenheid || '';
-                                                                const isLength = ['m','cm','mm'].includes(u);
-                                                                const isMass = ['kg','g'].includes(u);
-                                                                const isVolume = ['m³','L','mL'].includes(u);
-                                                                const isArea = ['m²','cm²','mm²'].includes(u);
-                                                                let displayUnit = '';
-
-                                                                if (!hasMulDiv) {
-                                                                    // Linear/additive: allow linear conversions and show unit
-                                                                    if (u && ['cm','mm','g','mL'].includes(u)) {
-                                                                        const base = (u === 'cm' || u === 'mm') ? 'm' : (u === 'g' ? 'kg' : 'L');
-                                                                        v = convertToUnit(v, base, u);
-                                                                    }
-                                                                    displayUnit = u;
-                                                                } else {
-                                                                    // Multiplicative/divisive: allow area/volume if explicitly chosen
-                                                                    if (isArea) {
-                                                                        v = convertToUnit(v, 'm²', u);
-                                                                        displayUnit = u;
-                                                                    } else if (isVolume && u !== 'L') {
-                                                                        v = convertToUnit(v, 'm³', u);
-                                                                        displayUnit = u;
+                                                                    }}
+                                                                >
+                                                                    {(() => {
+                                                                        const formulaExpr = (prop.Formule_expression && String(prop.Formule_expression))
+                                                                            || (prop.formule && String(prop.formule))
+                                                                            || (prop.formules && prop.formules.formule && String(prop.formules.formule))
+                                                                            || '';
+                                                                        return formulaExpr;
+                                                                    })()}
+                                                                </Text>
+                                                                {(() => {
+                                                                    // Create combined properties list for formula evaluation
+                                                                    const allProperties = [
+                                                                        ...displayProperties.map((p) => ({
+                                                                            name: p.name,
+                                                                            value: p.waarde,
+                                                                            unit: p.eenheid || '',
+                                                                        })),
+                                                                        ...newPropertiesList.map((p) => ({
+                                                                            name: p.name,
+                                                                            value: p.value,
+                                                                            unit: p.unit || '',
+                                                                        })),
+                                                                    ];
+                                                                    const formulaExpr = (prop.Formule_expression && String(prop.Formule_expression))
+                                                                        || (prop.formule && String(prop.formule))
+                                                                        || (prop.formules && prop.formules.formule && String(prop.formules.formule))
+                                                                        || '';
+                                                                    const normalizedExpr = formulaExpr.replace(/[x×]/g, '*');
+                                                                    const evaluation = evaluateFormule(normalizedExpr, allProperties);
+                                                                    if (evaluation.error) {
+                                                                        return (
+                                                                            <Text style={{
+                                                                                color: colors.red500,
+                                                                                fontSize: 12,
+                                                                                fontStyle: 'italic',
+                                                                            }}>
+                                                                                {evaluation.error}
+                                                                            </Text>
+                                                                        );
                                                                     } else {
-                                                                        displayUnit = '';
+                                                                        // Align display logic with new property preview: convert only when appropriate
+                                                                        const hasMulDiv = /[*/]/.test(normalizedExpr);
+                                                                        let v = evaluation.value;
+                                                                        const u = prop.eenheid || '';
+                                                                        const isLength = ['m','cm','mm'].includes(u);
+                                                                        const isMass = ['kg','g'].includes(u);
+                                                                        const isVolume = ['m³','L','mL'].includes(u);
+                                                                        const isArea = ['m²','cm²','mm²'].includes(u);
+                                                                        let displayUnit = '';
+
+                                                                        if (!hasMulDiv) {
+                                                                            // Linear/additive: allow linear conversions and show unit
+                                                                            if (u && ['cm','mm','g','mL'].includes(u)) {
+                                                                                const base = (u === 'cm' || u === 'mm') ? 'm' : (u === 'g' ? 'kg' : 'L');
+                                                                                v = convertToUnit(v, base, u);
+                                                                            }
+                                                                            displayUnit = u;
+                                                                        } else {
+                                                                            // Multiplicative/divisive: allow area/volume if explicitly chosen
+                                                                            if (isArea) {
+                                                                                v = convertToUnit(v, 'm²', u);
+                                                                                displayUnit = u;
+                                                                            } else if (isVolume && u !== 'L') {
+                                                                                v = convertToUnit(v, 'm³', u);
+                                                                                displayUnit = u;
+                                                                            } else {
+                                                                                displayUnit = '';
+                                                                            }
+                                                                        }
+
+                                                                        const displayVal = roundToDecimals(v, 6);
+                                                                        return (
+                                                                            <Text style={[AppStyles.propertyValue, { marginTop: 2 }]}>
+                                                                                {displayVal}
+                                                                                {displayUnit ? ` ${displayUnit}` : ''}
+                                                                            </Text>
+                                                                        );
                                                                     }
-                                                                }
+                                                                })()}
+                                                            </>
+                                                        )}
+                                                        {(() => {
+                                                            const formulaExpr = (prop.Formule_expression && String(prop.Formule_expression))
+                                                                || (prop.formule && String(prop.formule))
+                                                                || (prop.formules && prop.formules.formule && String(prop.formules.formule))
+                                                                || '';
+                                                            const isFormula = formulaExpr.trim() !== '' && /[+\-*/()x×]/.test(formulaExpr) && !/^\d+\.?\d*[a-zA-Z]*$/.test(formulaExpr.trim());
+                                                            return !isFormula;
+                                                        })() && (
+                                                            <Text style={[AppStyles.propertyValue, { marginTop: 4 }]}>
+                                                                {prop.waarde}
+                                                                {prop.eenheid ? ` ${prop.eenheid}` : ''}
+                                                            </Text>
+                                                        )}
+                                                    </View>
 
-                                                                const displayVal = roundToDecimals(v, 6);
-                                                                return (
-                                                                    <Text style={[AppStyles.propertyValue, { marginTop: 2 }]}>
-                                                                        {displayVal}
-                                                                        {displayUnit ? ` ${displayUnit}` : ''}
-                                                                    </Text>
-                                                                );
-                                                            }
-                                                        })()}
-                                                    </>
-                                                )}
-                                                {(() => {
-                                                    const formulaExpr = (prop.Formule_expression && String(prop.Formule_expression))
-                                                        || (prop.formule && String(prop.formule))
-                                                        || (prop.formules && prop.formules.formule && String(prop.formules.formule))
-                                                        || '';
-                                                    const isFormula = formulaExpr.trim() !== '' && /[+\-*/()x×]/.test(formulaExpr) && !/^\d+\.?\d*[a-zA-Z]*$/.test(formulaExpr.trim());
-                                                    return !isFormula;
-                                                })() && (
-                                                    <Text style={[AppStyles.propertyValue, { marginTop: 4 }]}>
-                                                        {prop.waarde}
-                                                        {prop.eenheid ? ` ${prop.eenheid}` : ''}
-                                                    </Text>
-                                                )}
+                                                    {/* Divider */}
+                                                    <View
+                                                        style={{
+                                                            width: 1,
+                                                            backgroundColor: colors.lightGray500,
+                                                            marginHorizontal: 10,
+                                                            alignSelf: 'stretch', 
+                                                        }}
+                                                    />
+
+                                                    {/* Bewerken */}
+                                                    <TouchableOpacity
+                                                        onPress={() => {
+                                                            setModalPropertyIndex(index);
+                                                            setShowEditModal(true);
+                                                        }}
+                                                    >
+                                                        <Text style={{ color: colors.primary, fontWeight: '600' }}>Bewerken</Text>
+                                                    </TouchableOpacity>
                                                 </View>
-
-                                                {/* Divider */}
-                                                <View
-                                                style={{
-                                                    width: 1,
-                                                    backgroundColor: colors.lightGray500,
-                                                    marginHorizontal: 10,
-                                                    alignSelf: 'stretch', 
-                                                }}
-                                                />
-
-                                                {/* Bewerken */}
-                                                <TouchableOpacity
-                                                onPress={() => {
-                                                    setModalPropertyIndex(index);
-                                                    setShowEditModal(true);
-                                                }}
-                                                >
-                                                <Text style={{ color: colors.primary, fontWeight: '600' }}>Bewerken</Text>
-                                                </TouchableOpacity>
-                                            </View>
                                             </View>
                                         </View>
                                     </View>
@@ -1079,6 +1129,7 @@ const AddPropertyScreen = ({ ...props }) => {
                         <EditPropertyModal
                             visible={showEditModal}
                             onClose={() => setShowEditModal(false)}
+                            objectId={item.id}
                             property={displayProperties[modalPropertyIndex]}
                             existingPropertiesDraft={existingPropertiesDraft}
                             onSaved={async (updated) => {
@@ -1088,13 +1139,10 @@ const AddPropertyScreen = ({ ...props }) => {
                                 if (updated && updated.__deleted) {
                                     // Immediate UI removal of the deleted property
                                     const deletedId = updated.id;
-                                    // Remove from existing draft list
+                                    // Remove from existing draft list - this triggers the displayProperties useMemo
                                     const newDraft = originalDraft.filter(p => p.id !== deletedId);
+                                    console.log('[AddPropertyScreen] Deleted property, new draft length:', newDraft.length);
                                     setExistingPropertiesDraft(newDraft);
-                                    // Also remove from the live item.properties array clone (since item comes from hierarchy prop)
-                                    if (item && Array.isArray(item.properties)) {
-                                        item.properties = item.properties.filter(p => p.id !== deletedId);
-                                    }
                                     // Close modal and clear selection
                                     setShowEditModal(false);
                                     setModalPropertyIndex(null);
@@ -1221,7 +1269,7 @@ const AddPropertyScreen = ({ ...props }) => {
                                 <View>
                                 {Platform.OS === 'web' ? (
                                     <View style={{ flexDirection: 'row', gap: 12 }}>
-                                <View style={[AppStyles.formGroup, { flex: 1 }]}> 
+                                        <View style={[AppStyles.formGroup, { flex: 1 }]}> 
                                             <Text style={AppStyles.formLabel}>Eigenschap Naam</Text>
                                             <TextInput
                                                 placeholder="Bijv. Gewicht"
@@ -1431,6 +1479,7 @@ const AddPropertyScreen = ({ ...props }) => {
                                                                 v = convertToUnit(v, 'm²', prop.unit);
                                                                 displayUnit = prop.unit;
                                                             } else if (isVolumeUnit && prop.unit !== 'L') {
+                                                                // If user selects m³ or mL, convert from m³; if L is selected here with mul/div, we suppress unit to avoid confusion
                                                                 v = convertToUnit(v, 'm³', prop.unit);
                                                                 displayUnit = prop.unit;
                                                             } else {
@@ -1517,8 +1566,6 @@ const AddPropertyScreen = ({ ...props }) => {
                     </View>
                 </ScrollView>
                 
-
-                
                 {/* Add Property FAB */}
                 <TouchableOpacity onPress={addNewPropertyField} style={AppStyles.fab}>
                     <Plus color="white" size={24} />
@@ -1562,3 +1609,5 @@ const AddPropertyScreen = ({ ...props }) => {
 };
 
 export default AddPropertyScreen;
+
+

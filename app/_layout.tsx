@@ -1,22 +1,22 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import type { User } from '@supabase/supabase-js';
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { onAuthStateChanged } from 'firebase/auth';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Text, TouchableOpacity, View } from 'react-native';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { allowedEmails } from '../utils/whitelist';
-import { supabase } from './(tabs)/config/config';
+import { auth } from './(tabs)/config/firebase';
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
   const [loaded] = useFonts({
     SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
   });
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const allowedEmailSet = useMemo(() => {
     return new Set(allowedEmails.map((email) => email.toLowerCase()));
@@ -24,58 +24,37 @@ export default function RootLayout() {
 
   useEffect(() => {
     let isMounted = true;
-    let subscription;
 
-    const sessionCheck = async () => {
-      try {
-        const { data, error } = await supabase.auth.getSession();
-        if (error) {
-          console.error('[RootLayout] Error fetching session:', error);
-        }
-        if (isMounted) {
-          setUser(data?.session?.user ?? null);
-        }
-      } catch (sessionError) {
-        console.error('[RootLayout] Unexpected session error:', sessionError);
-      } finally {
-        if (isMounted) {
-          setAuthLoading(false);
-        }
-      }
-    };
-
-    sessionCheck();
-
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+    // Firebase auth state listener
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       if (isMounted) {
-        setUser(session?.user ?? null);
+        setUser(firebaseUser ?? null);
+        setAuthLoading(false);
       }
     });
-    subscription = data?.subscription;
 
     return () => {
       isMounted = false;
-      subscription?.unsubscribe();
+      unsubscribe();
     };
   }, []);
 
   const handleRestrictedLogout = async () => {
     setAuthLoading(true);
     try {
-      const { error } = await supabase.auth.signOut();
-      if (error) {
-        console.error('[RootLayout] Failed to sign out from restricted screen:', error);
-      }
+      // Firebase signOut is already called in (tabs)/index.js when user is unauthorized
+      // This just clears local state
+      setUser(null);
     } catch (signOutError) {
       console.error('[RootLayout] Unexpected sign-out error:', signOutError);
     } finally {
-      setUser(null);
       setAuthLoading(false);
     }
   };
 
-  const userEmail = (user?.email || '').toLowerCase();
-  const isUnauthorized = !!user && !allowedEmailSet.has(userEmail);
+  const userEmail = (user as any)?.email || '';
+  const normalizedEmail = userEmail.toLowerCase();
+  const isUnauthorized = !!user && !allowedEmailSet.has(normalizedEmail);
 
   if (!loaded || authLoading) {
     return (

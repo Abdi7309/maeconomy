@@ -1,14 +1,13 @@
 import { ArrowRight, BarChart3, Boxes, Calculator, Filter, GitBranch, LogOut, Menu, Plus, Recycle } from 'lucide-react-native';
 import React, { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { Alert, Animated, Modal, Platform, RefreshControl, ScrollView, StatusBar, Text, TouchableOpacity, View } from 'react-native';
-import { fetchFormules as fetchFormulesApi, linkObjects } from '../api';
+import { fetchFormules as fetchFormulesApi, linkObjects } from '../../../lib/api';
 import AppStyles, { colors } from '../AppStyles';
 import AddFormuleModal from '../components/modals/AddFormuleModal';
 import AddObjectModal from '../components/modals/AddObjectModal';
 import FilterModal from '../components/modals/FilterModal';
 import FormulePickerModal from '../components/modals/FormulePickerModal';
 import SummaryModal from '../components/modals/SummaryModal';
-import { supabase } from '../config/config';
 
 const PropertyButton = React.memo(({ onClick }) => (
     <TouchableOpacity onPress={onClick} style={{ paddingVertical: 6, paddingHorizontal: 8 }}>
@@ -562,9 +561,9 @@ useEffect(() => {
         let newObjects = [];
         // Track temp ids we inject so we can roll them back on failure/timeout
         const injectedTempIds = [];
-        // Get current user's username from allUsers
-        const currentUser = allUsers.find(u => u.id === userToken);
-        const currentUsername = currentUser?.username || 'Jij';
+        // Get current user's username from allUsers (with fallback)
+        const currentUser = (allUsers && Array.isArray(allUsers)) ? allUsers.find(u => u.id === userToken) : null;
+        const currentUsername = currentUser?.username || currentUser?.name || 'Jij';
         if (data) {
             // Always generate a group_key for multiple objects if not present
             let groupKey = data.groupKey;
@@ -705,7 +704,7 @@ useEffect(() => {
     // Don't show skeleton when attaching existing objects
     const showSkeletonFixed = showSkeleton && !isAttachingExisting;
 
-    // Fetch Formules on component mount and set up real-time subscriptions
+    // Fetch Formules on component mount
     useEffect(() => {
         (async () => {
             try {
@@ -716,44 +715,7 @@ useEffect(() => {
                 setFormules([]);
             }
         })();
-
-        // Set up real-time subscriptions
-        const objectsSubscription = supabase
-            .channel('objects-channel')
-            .on('postgres_changes', 
-                { event: '*', schema: 'public', table: 'objects' },
-                (payload) => {
-                    console.log('Object change detected:', payload)
-                    if (onRefresh) {
-                        onRefresh() // Trigger a refresh of the objects
-                    }
-                }
-            )
-            .subscribe()
-
-        const formulesSubscription = supabase
-            .channel('formules-channel')
-            .on('postgres_changes',
-                { event: '*', schema: 'public', table: 'formules' },
-                async (payload) => {
-                    console.log('Formula change detected:', payload)
-                    // Refresh formulas list
-                    try {
-                        const FormulesData = await fetchFormulesApi();
-                        setFormules(Array.isArray(FormulesData) ? FormulesData : []);
-                    } catch (error) {
-                        console.error('Error refreshing formulas:', error);
-                    }
-                }
-            )
-            .subscribe()
-
-        // Cleanup subscriptions
-        return () => {
-            objectsSubscription.unsubscribe()
-            formulesSubscription.unsubscribe()
-        }
-    }, [onRefresh]);
+    }, []);
 
     useEffect(() => {
         if (showFormulePickerModal) {
@@ -1002,7 +964,7 @@ useEffect(() => {
             const isFlowType = (t) => (t === 'raw_material' || t === 'intermediate' || t === 'component');
             const includeInFlow = (node) => {
                 const t = node?.material_flow_type;
-                return isFlowType(t) || t === 'final_product' || t == null;
+                return isFlowType(t) || t === 'final_product' || t === 'default' || t == null;
             };
             // Robust number parsing helpers for totals (handle strings like "100kg", nested objects, or values embedded in name)
             const _parseNumeric = (val) => {
@@ -1092,12 +1054,19 @@ useEffect(() => {
                 return agg;
             };
             // Totals across entire tree: include flow-allowed nodes even under non-flow parents
-            const aggregateFlowPropsTotals = (node) => {
+            const aggregateFlowPropsTotals = (node, inFlowContext = false) => {
                 if (!node) return {};
-                let agg = includeInFlow(node) ? ownPropsMap(node) : {};
+                const t = node.material_flow_type;
+                const isFlow = isFlowType(t) || t === 'final_product';
+                // We are in flow context if parent was, or if this node starts it.
+                const currentInFlowContext = inFlowContext || isFlow;
+
+                // Only include own props if in flow context
+                let agg = currentInFlowContext ? ownPropsMap(node) : {};
+
                 if (Array.isArray(node.children) && node.children.length > 0) {
                     node.children.forEach((ch) => {
-                        const childAgg = aggregateFlowPropsTotals(ch);
+                        const childAgg = aggregateFlowPropsTotals(ch, currentInFlowContext);
                         agg = mergeProps(agg, childAgg);
                     });
                 }
@@ -1111,7 +1080,7 @@ useEffect(() => {
                 const totals = {};
                 // Traverse all top-level roots so we include flow nodes even under default/non-flow parents
                 (source || []).forEach((root) => {
-                    const agg = aggregateFlowPropsTotals(root);
+                    const agg = aggregateFlowPropsTotals(root, false);
                     Object.keys(agg).forEach((pname) => {
                         if (!totals[pname]) totals[pname] = 0;
                         totals[pname] += agg[pname].total;
