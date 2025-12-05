@@ -24,21 +24,27 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
         }
     }, [objectId]);
 
-    // Listen to deletion events from EditPropertyModal
+    // Listen to deletion AND update events
     useEffect(() => {
-        const handleDeletion = () => {
-            console.log('[PropertiesScreen] Deletion detected, triggering rebuild');
+        const handleChange = () => {
+            console.log('[PropertiesScreen] Property change detected, triggering rebuild');
             setDeletionNotifier(n => n + 1); // Trigger a rebuild
         };
         
         try {
             const g = globalThis;
+            // Listen to deletions
             g.__propertyDeletionListeners = g.__propertyDeletionListeners || [];
-            g.__propertyDeletionListeners.push(handleDeletion);
+            g.__propertyDeletionListeners.push(handleChange);
+
+            // Listen to general updates
+            g.__propertyChangeListeners = g.__propertyChangeListeners || [];
+            g.__propertyChangeListeners.push(handleChange);
             
             return () => {
-                // Cleanup listener
-                g.__propertyDeletionListeners = g.__propertyDeletionListeners.filter(l => l !== handleDeletion);
+                // Cleanup listeners
+                if (g.__propertyDeletionListeners) g.__propertyDeletionListeners = g.__propertyDeletionListeners.filter(l => l !== handleChange);
+                if (g.__propertyChangeListeners) g.__propertyChangeListeners = g.__propertyChangeListeners.filter(l => l !== handleChange);
             };
         } catch (_) {}
     }, []);
@@ -211,27 +217,132 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
                 return sortPropsById(base);
             }
 
-            // Build map keyed by name::formula so we can replace existing items with optimistic edits
-            const byKey = new Map();
+            // Build map keyed by ID first, then fallback to name for matching
+            const byId = new Map();
+            const byName = new Map();
+
+            // 1. Index base properties
             base.forEach(p => {
-                const key = (p.name || '').toLowerCase() + '::' + (p.Formule_expression || '');
-                byKey.set(key, { ...p });
+                if (p.id && !String(p.id).startsWith('temp_')) {
+                    byId.set(p.id, { ...p });
+                }
+                // Also index by name for fallback matching if ID is missing or temp
+                const nameKey = (p.name || '').toLowerCase();
+                if (!byName.has(nameKey)) byName.set(nameKey, []);
+                byName.get(nameKey).push(p);
             });
 
+            // 2. Apply optimistic updates
             entry.props.forEach(p => {
-                const nameLc = (p.name || '').toLowerCase();
-                const key = nameLc + '::' + (p.Formule_expression || '');
                 const optimisticVal = { ...p, __optimistic: true, __createdAt: p.__createdAt || now };
-                // Remove any existing entries with the same name (regardless of old formula), then insert
-                for (const k of Array.from(byKey.keys())) {
-                    if (k.startsWith(nameLc + '::')) {
-                        byKey.delete(k);
+                
+                // Case A: Optimistic update has a real ID (it was an edit of an existing property)
+                if (p.id && !String(p.id).startsWith('temp_')) {
+                    byId.set(p.id, optimisticVal);
+                    // Also update name index to prevent duplicates if we iterate by name later
+                    const nameKey = (p.name || '').toLowerCase();
+                    // Remove old entry from name index if it exists
+                    if (byName.has(nameKey)) {
+                        byName.set(nameKey, byName.get(nameKey).filter(existing => existing.id !== p.id));
+                    }
+                } 
+                // Case B: Optimistic update has a temp ID (newly created) OR we are editing a property that only had a temp ID locally
+                else {
+                    // Try to match by name if ID is temp
+                    const nameKey = (p.name || '').toLowerCase();
+                    if (byName.has(nameKey) && byName.get(nameKey).length > 0) {
+                        // We found existing properties with this name.
+                        // Assume this optimistic update replaces ONE of them.
+                        // Ideally we'd know which one, but without ID it's a guess.
+                        // Strategy: Replace the first one found to avoid duplicates.
+                        const existingMatches = byName.get(nameKey);
+                        const match = existingMatches[0];
+                        
+                        // If the match has a real ID, use that ID for the optimistic value so it overrides correctly
+                        if (match.id && !String(match.id).startsWith('temp_')) {
+                            byId.set(match.id, { ...optimisticVal, id: match.id });
+                        } else {
+                            // Both are temp or missing ID, just use the optimistic one
+                            // We can't easily put it in byId if it has no real ID, so we'll handle "leftovers" later.
+                        }
+                        
+                        // Remove this match from the available pool so we don't match it again
+                        existingMatches.shift();
+                        if (existingMatches.length === 0) byName.delete(nameKey);
+                    }
+                    
+                    // Always add the optimistic value to a "new/temp" list? 
+                    // Actually, let's just collect everything into a final list.
+                }
+            });
+
+            // Reconstruct the list
+            // Start with everything in byId (real IDs, including optimistic overrides)
+            let finalList = Array.from(byId.values());
+
+            // Add remaining base items that weren't overridden by ID (and thus are still in byName)
+            // Wait, byId contains ALL base items with real IDs.
+            // We need to handle items that ONLY exist in byName (no real ID yet) AND optimistic items that didn't match a real ID.
+            
+            // Let's simplify:
+            // We want to merge `base` and `entry.props`.
+            // Priority: Optimistic > Base.
+            // Match criteria: ID > Name.
+            
+            const mergedMap = new Map();
+            
+            // 1. Put all base items in map
+            base.forEach(p => {
+                // Prefer real ID as key
+                const key = (p.id && !String(p.id).startsWith('temp_')) ? p.id : `NAME:${(p.name||'').toLowerCase()}`;
+                mergedMap.set(key, p);
+            });
+
+            // 2. Overlay optimistic items
+            entry.props.forEach(p => {
+                // If p has a real ID, it definitely overrides the base item with that ID.
+                if (p.id && !String(p.id).startsWith('temp_')) {
+                    mergedMap.set(p.id, { ...p, __optimistic: true });
+                    // Ensure we don't have a duplicate by name in the map (e.g. if base had it keyed by name because it lacked ID - unlikely but possible)
+                    const nameKey = `NAME:${(p.name||'').toLowerCase()}`;
+                    if (mergedMap.has(nameKey)) {
+                        const existing = mergedMap.get(nameKey);
+                        // If the existing item by name is actually the same item (conceptually), remove it.
+                        // But if it's a different item that just happens to have the same name, we might keep it?
+                        // For now, assume name uniqueness per object is desired or at least a strong hint.
+                        // If we are editing "Length", we want to replace the old "Length".
+                        mergedMap.delete(nameKey); 
+                    }
+                } else {
+                    // Optimistic item has temp ID.
+                    // Try to find a match by Name in the existing map.
+                    const nameKey = `NAME:${(p.name||'').toLowerCase()}`;
+                    
+                    // Check if we have a base item with this name (keyed by ID or Name)
+                    let foundMatchKey = null;
+                    for (const [k, v] of mergedMap.entries()) {
+                        if ((v.name || '').toLowerCase() === (p.name || '').toLowerCase()) {
+                            foundMatchKey = k;
+                            break;
+                        }
+                    }
+
+                    if (foundMatchKey) {
+                        // We found a base item with the same name.
+                        // Replace it with our optimistic version.
+                        // Preserve the ID of the base item if it's real, so future updates work.
+                        const baseItem = mergedMap.get(foundMatchKey);
+                        const realId = (baseItem.id && !String(baseItem.id).startsWith('temp_')) ? baseItem.id : p.id;
+                        
+                        mergedMap.set(foundMatchKey, { ...p, id: realId, __optimistic: true });
+                    } else {
+                        // No match found, it's a new property
+                        mergedMap.set(p.id || nameKey, { ...p, __optimistic: true });
                     }
                 }
-                byKey.set(key, optimisticVal);
             });
 
-            const merged = Array.from(byKey.values());
+            const merged = Array.from(mergedMap.values());
             return sortPropsById(merged);
         } catch (e) {
             console.warn('[PropertiesScreen] merge failed', e);

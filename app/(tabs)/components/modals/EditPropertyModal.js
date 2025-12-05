@@ -1,15 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Modal, Platform, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Calculator } from 'lucide-react-native';
 import {
     createFormule,
     deleteProperty,
     fetchFormuleByExpression,
     fetchFormules,
     fetchFormulesSafe,
-    updateProperty
-} from '../../../../lib/api';
+    updateProperty,
+    findPropertyIdByName
+} from '../../api';
 import AppStyles, { colors } from '../../AppStyles';
-import WaardeInput from '../WaardeInput';
 import AddFormuleModal from './AddFormuleModal';
 import FormulePickerModal from './FormulePickerModal';
 
@@ -214,6 +215,90 @@ const SafeView = ({ children, ...rest }) => (
     </View>
 );
 
+// Format numbers using Dutch-style separators: thousands '.' and decimals ','
+function formatNumber(value, maxDecimals = 6) {
+  try {
+    if (typeof Intl !== 'undefined' && Intl.NumberFormat) {
+      return new Intl.NumberFormat('nl-NL', {
+        maximumFractionDigits: maxDecimals,
+      }).format(value);
+    }
+  } catch (_) {}
+  // Fallback: manual formatting
+  if (typeof value !== 'number' || !isFinite(value)) return String(value);
+  let str = value.toFixed(maxDecimals);
+  // trim trailing zeros and optional decimal point
+  str = str.replace(/\.0+$/, '').replace(/(\.[0-9]*?[1-9])0+$/, '$1').replace(/\.$/, '');
+  const [intPart, decPart] = str.split('.');
+  const withThousands = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  return decPart ? `${withThousands},${decPart}` : withThousands;
+}
+
+function WaardeInput({ value, onChange, onAddFormule, isFormula = false, computedValue = null, unit = '', error = null, onFocus, onBlur }) {
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: colors.lightGray300,
+        borderRadius: 8,
+        backgroundColor: 'white',
+      }}
+    >
+      <View style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 12 }}>
+        <TextInput
+          style={[
+            { fontSize: 16, color: isFormula ? colors.lightGray600 : colors.lightGray900, padding: 0 },
+            Platform.OS === 'web' && { outline: 'none' }
+          ]}
+          placeholder="Waarde of formule"
+          value={value}
+          onChangeText={onChange}
+          onFocus={onFocus}
+          onBlur={onBlur}
+          blurOnSubmit={false}
+          // Improve usability: allow submitting with enter on web
+          onSubmitEditing={() => {
+            // If user presses enter in a formula context, open picker for refinement
+            if (isFormula && typeof onAddFormule === 'function') {
+              console.log('[WaardeInput] onSubmitEditing -> opening formule modal');
+              onAddFormule();
+            }
+          }}
+        />
+        {isFormula && (
+          <View style={{ marginTop: 4 }}>
+            {error ? (
+              <Text style={{ color: colors.red500, fontSize: 12, fontStyle: 'italic' }}>{error}</Text>
+            ) : (
+              typeof computedValue === 'number' && (
+                <Text style={{ color: colors.lightGray700, fontSize: 12 }}>
+                  = {formatNumber(computedValue)}
+                  {unit ? ` ${unit}` : ''}
+                </Text>
+              )
+            )}
+          </View>
+        )}
+      </View>
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityLabel="Formule kiezen"
+        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        onPress={() => {
+          if (typeof onAddFormule === 'function') {
+            onAddFormule();
+          }
+        }}
+        style={{ padding: 8, borderLeftWidth: 1, borderLeftColor: colors.lightGray200 }}
+      >
+        <Calculator color={colors.blue600} size={20} />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 // ✅ objectId toegevoegd als prop
 const EditPropertyModal = ({ visible, onClose, objectId, property, existingPropertiesDraft, onSaved }) => {
     const initialFormule = property?.formule || property?.Formule_expression || property?.formules?.formule || '';
@@ -402,6 +487,7 @@ const EditPropertyModal = ({ visible, onClose, objectId, property, existingPrope
     }, [editedFormule, computedDisplay, formulaTyping, editedValue]);
 
     const handleSave = async () => {
+        console.log('[EditPropertyModal] handleSave called. objectId:', objectId, 'propertyId:', property?.id);
         if (!property?.id) { onClose(); return; }
 
         if (!objectId) {
@@ -409,7 +495,8 @@ const EditPropertyModal = ({ visible, onClose, objectId, property, existingPrope
         }
 
         const isFormule = editedFormule && /[+\-*/x×]/.test(editedFormule);
-        let waardeToSend = editedValue;
+        // Use the input buffer directly for manual values to ensure latest keystrokes are captured
+        let waardeToSend = isFormule ? editedValue : editedValueInput;
         let formuleIdToSend = editedFormuleId ?? null;
         const isTemp = typeof property.id === 'string' && property.id.startsWith('temp_prop_');
 
@@ -477,16 +564,29 @@ const EditPropertyModal = ({ visible, onClose, objectId, property, existingPrope
         });
         onClose();
 
-        if (isTemp) {
-            console.log('[EditPropertyModal] Temp property edited locally, skipping backend update');
-            return;
-        }
-
         // ✅ Persist with API payload (met objectId én property.id)
         if (objectId) {
-            const persisted = await updateProperty(objectId, property.id, basePayloadApi);
+            let targetPropertyId = property.id;
+
+            // If it's a temp property, try to resolve the real ID from the backend by name
+            if (isTemp) {
+                console.log('[EditPropertyModal] Temp property detected. Attempting to resolve real ID by name:', property.name);
+                const realId = await findPropertyIdByName(objectId, property.name);
+                if (realId) {
+                    console.log('[EditPropertyModal] Resolved real ID for temp property:', realId);
+                    targetPropertyId = realId;
+                } else {
+                    console.warn('[EditPropertyModal] Could not resolve real ID for temp property. Skipping backend update.');
+                    return;
+                }
+            }
+
+            const persisted = await updateProperty(objectId, targetPropertyId, basePayloadApi);
             if (!persisted) {
-                Alert.alert('Opslaan deels mislukt', 'Waarde tijdelijk bijgewerkt maar server update faalde. Probeer opnieuw.');
+                // Only alert if it wasn't a temp property that we failed to resolve (which we already logged)
+                if (!isTemp) {
+                     Alert.alert('Opslaan deels mislukt', 'Waarde tijdelijk bijgewerkt maar server update faalde. Probeer opnieuw.');
+                }
             } else {
                 console.log('[EditPropertyModal] Property base update persisted');
                 try { if (typeof property?.onRefresh === 'function') property.onRefresh(); } catch (_) { }

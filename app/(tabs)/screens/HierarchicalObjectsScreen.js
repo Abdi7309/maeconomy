@@ -1,7 +1,7 @@
 import { ArrowRight, BarChart3, Boxes, Calculator, Filter, GitBranch, LogOut, Menu, Plus, Recycle } from 'lucide-react-native';
 import React, { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { Alert, Animated, Modal, Platform, RefreshControl, ScrollView, StatusBar, Text, TouchableOpacity, View } from 'react-native';
-import { fetchFormules as fetchFormulesApi, linkObjects } from '../../../lib/api';
+import { fetchFormules as fetchFormulesApi, linkObjects } from '../api';
 import AppStyles, { colors } from '../AppStyles';
 import AddFormuleModal from '../components/modals/AddFormuleModal';
 import AddObjectModal from '../components/modals/AddObjectModal';
@@ -1386,7 +1386,16 @@ useEffect(() => {
                             )
                                 .map((group) => {
                                     const times = group.items
-                                        .map((it) => new Date(it.created_at || it.updated_at || Date.now()).getTime())
+                                        .map((it) => {
+                                            const val = it.created_at || it.updated_at;
+                                            if (val && typeof val === 'object' && typeof val.toMillis === 'function') {
+                                                return val.toMillis();
+                                            }
+                                            if (val && typeof val === 'object' && val.seconds) {
+                                                return val.seconds * 1000;
+                                            }
+                                            return new Date(val || Date.now()).getTime();
+                                        })
                                         .filter((t) => Number.isFinite(t));
                                     const sortKey = times.length ? Math.min(...times) : Number.MAX_SAFE_INTEGER;
                                     return { ...group, sortKey };

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Alert, Modal, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { createFormule, deleteFormule, updateFormule } from '../../../../lib/api';
+import { createFormule, deleteFormule, updateFormule } from '../../api';
 import AppStyles from '../../AppStyles';
 
 const AddFormuleModal = ({ visible, onClose, onSave, editingFormule = null, onDelete }) => {

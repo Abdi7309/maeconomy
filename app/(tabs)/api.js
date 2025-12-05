@@ -22,7 +22,7 @@ import {
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 // LET OP: pad zoals jij gebruikt
-import { auth, db, storage } from '../app/(tabs)/config/firebase';
+import { auth, db, storage } from './config/firebase';
 
 // Kleine helper om van een naam een Firestore-vriendelijke ID te maken
 const slugify = (str) =>
@@ -307,22 +307,9 @@ export const handleAddObject = async (parentPath, newObjectData, userToken) => {
     const createdIds = [];
 
     for (const objectName of uniqueNames) {
-      // Zorg dat doc-id ongeveer de naam is
-      const baseId = slugify(objectName);
-      let docId = baseId;
-      let index = 1;
-
-      // simpele collision check: als ID al bestaat, plak er -2, -3, ...
-      // (zodat je nog steeds de naam ziet in Firestore)
-      while (true) {
-        const existingRef = doc(objectsRef, docId);
-        const existingSnap = await getDoc(existingRef);
-        if (!existingSnap.exists()) break;
-        index += 1;
-        docId = `${baseId}-${index}`;
-      }
-
-      const newRef = doc(objectsRef, docId);
+      // Use auto-generated ID instead of name-based slug
+      const newRef = doc(collection(db, 'objects'));
+      
       const objectData = {
         naam: objectName,
         parent_id: parentId,
@@ -375,10 +362,8 @@ export const addProperties = async (objectId, properties) => {
     const batch = writeBatch(db);
 
     for (const prop of properties) {
-      const propId =
-        prop.id ||
-        prop.name ||
-        `prop_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      // Use Firestore auto-ID if prop.id is missing (never use name)
+      const propId = prop.id || doc(collection(db, `objects/${objectId}/eigenschappen`)).id;
 
       // ---- FILE UPLOAD ----
       const files = [];
@@ -479,6 +464,21 @@ export const updateProperty = async (objectId, propertyId, payload) => {
   } catch (error) {
     console.error('[updateProperty] Error:', error);
     return false;
+  }
+};
+
+export const findPropertyIdByName = async (objectId, propertyName) => {
+  try {
+    const propsRef = collection(db, `objects/${objectId}/eigenschappen`);
+    const q = query(propsRef, where('name', '==', propertyName));
+    const snap = await getDocs(q);
+    if (!snap.empty) {
+      return snap.docs[0].id;
+    }
+    return null;
+  } catch (error) {
+    console.error('[findPropertyIdByName] Error:', error);
+    return null;
   }
 };
 

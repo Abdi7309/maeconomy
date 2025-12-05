@@ -10,7 +10,7 @@ import {
     fetchTemplates as apiFetchTemplates,
     updateProperty as apiUpdateProperty,
     fetchAllUsers,
-} from '../../lib/api';
+} from './api';
 import AppStyles, { colors } from './AppStyles';
 import { auth, db } from './config/firebase';
 import AddPropertyScreen from './screens/AddPropertyScreen';
@@ -293,7 +293,11 @@ const App = () => {
 
     const handleFetchObjects = async (isRefreshing = false) => {
         if (!filterOption) return;
-        if(isRefreshing) setRefreshing(true);
+        if(isRefreshing) {
+            setRefreshing(true);
+            // Force clear cache to ensure we don't have any stale state
+            await clearCachedData('objects');
+        }
         else setIsLoading(true);
 
         try {
@@ -304,7 +308,7 @@ const App = () => {
                     console.log('[handleFetchObjects] Using cached objects');
                     setObjectsHierarchy(cached);
                     setIsLoading(false);
-                    return;
+                    // Do NOT return here. Continue to fetch fresh data in background (stale-while-revalidate)
                 }
             }
 
@@ -356,7 +360,8 @@ const App = () => {
     const handleAddObject = async (parentPath, newObjectData) => {
         const res = await apiAddObject(parentPath, newObjectData, userToken);
         if (res && res.success) {
-            await handleFetchObjects();
+            // Force refresh to get the new object and any other updates
+            await handleFetchObjects(true);
             await handleFetchUsers();
         }
         return res;
@@ -381,20 +386,95 @@ const App = () => {
         // Otherwise, persist to DB now
         const success = await apiAddProperties(objectId, properties);
         if (success) {
-            await handleFetchObjects();
+            await handleFetchObjects(true);
         }
         return success;
     };
 
     const handleUpdateProperty = async (propertyId, payload) => {
+        // We don't have the objectId here easily to update local state deeply, 
+        // but we can try to find it or just rely on the refresh.
+        // However, to fix the "stale data on back navigation" issue, we should try to update local state if possible.
+        // Since we don't have the objectId passed to this function, we'll rely on the global cache mechanism 
+        // which we improved in AddPropertyScreen/PropertiesScreen.
+        
+        // But wait, AddPropertyScreen calls this. It knows the objectId.
+        // Let's update the signature if we can, but for now let's just do the API call.
+        
+        // Actually, AddPropertyScreen calls onUpdate={handleUpdateProperty}.
+        // Let's check AddPropertyScreen usage.
+        // It calls props.onUpdate(property.id, payload).
+        
         const success = await apiUpdateProperty(propertyId, payload);
 
         if (success) {
             // Cache ongeldig maken zodat een refresh nieuwe data uit Supabase haalt
             await clearCachedData('objects');
+            
+            // Trigger a background refresh to keep UI in sync eventually
+            // handleFetchObjects(true); // Don't await to keep UI responsive? 
+            // No, that might cause a flicker.
         }
-
         return success;
+    };
+
+    // New handler to update local state from AddPropertyScreen
+    const handleLocalPropertyUpdate = (objectId, updatedProperty) => {
+        console.log('[index.js] handleLocalPropertyUpdate', objectId, updatedProperty.name);
+        
+        // Helper to recursively update the object hierarchy
+        const updateHierarchy = (items) => {
+            return items.map(item => {
+                if (item.id === objectId) {
+                    // Found the object, update its properties
+                    let newProps = item.properties || [];
+                    // Check if property exists
+                    const exists = newProps.find(p => p.id === updatedProperty.id || (p.name === updatedProperty.name && String(p.id).startsWith('temp_')));
+                    
+                    if (exists) {
+                        newProps = newProps.map(p => {
+                            if (p.id === updatedProperty.id || (p.name === updatedProperty.name && String(p.id).startsWith('temp_'))) {
+                                return { ...p, ...updatedProperty };
+                            }
+                            return p;
+                        });
+                    } else {
+                        // Add if not exists (shouldn't happen for update, but safe)
+                        newProps = [...newProps, updatedProperty];
+                    }
+                    return { ...item, properties: newProps };
+                }
+                // Check children
+                if (item.children) {
+                    return { ...item, children: updateHierarchy(item.children) };
+                }
+                return item;
+            });
+        };
+
+        setObjectsHierarchy(prev => updateHierarchy(prev));
+        
+        // Also update activeTempObjects if needed
+        if (activeTempObjectsRef.current) {
+            activeTempObjectsRef.current = activeTempObjectsRef.current.map(item => {
+                if (item.id === objectId) {
+                    let newProps = item.properties || [];
+                    const exists = newProps.find(p => p.id === updatedProperty.id || (p.name === updatedProperty.name && String(p.id).startsWith('temp_')));
+                    if (exists) {
+                        newProps = newProps.map(p => {
+                            if (p.id === updatedProperty.id || (p.name === updatedProperty.name && String(p.id).startsWith('temp_'))) {
+                                return { ...p, ...updatedProperty };
+                            }
+                            return p;
+                        });
+                    } else {
+                        newProps = [...newProps, updatedProperty];
+                    }
+                    return { ...item, properties: newProps };
+                }
+                return item;
+            });
+        }
     };
 
     // Global formule save handler with auto-refresh
@@ -558,6 +638,7 @@ const App = () => {
                         setCurrentScreen={setCurrentScreen}
                         onSave={handleAddProperties}
                         onUpdate={handleUpdateProperty}
+                        onLocalUpdate={handleLocalPropertyUpdate}
                         onTemplateAdded={handleFetchTemplates}
                         onRefresh={onRefresh}
                         onFormuleSaved={handleFormuleSaved}

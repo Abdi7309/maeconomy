@@ -1,16 +1,98 @@
 
 import * as DocumentPicker from 'expo-document-picker';import * as ImagePicker from 'expo-image-picker';
-import { ChevronLeft, FileText, Paperclip, Plus, Tag, X } from 'lucide-react-native';
+import { Calculator, ChevronLeft, FileText, Paperclip, Plus, Tag, X } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, ScrollView, StatusBar, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { fetchFormules as fetchFormulesApi } from '../../../lib/api';
+import { fetchFormules as fetchFormulesApi } from '../api';
 import AppStyles, { colors } from '../AppStyles';
 import AddTemplateModal from '../components/modals/AddTemplateModal';
 import EditPropertyModal from '../components/modals/EditPropertyModal';
 import TemplatePickerModal from '../components/modals/TemplatePickerModal';
 import ValueInputModal from '../components/modals/ValueInputModal';
 
-import WaardeInput from '../components/WaardeInput';
+// Format numbers using Dutch-style separators: thousands '.' and decimals ','
+function formatNumber(value, maxDecimals = 6) {
+  try {
+    if (typeof Intl !== 'undefined' && Intl.NumberFormat) {
+      return new Intl.NumberFormat('nl-NL', {
+        maximumFractionDigits: maxDecimals,
+      }).format(value);
+    }
+  } catch (_) {}
+  // Fallback: manual formatting
+  if (typeof value !== 'number' || !isFinite(value)) return String(value);
+  let str = value.toFixed(maxDecimals);
+  // trim trailing zeros and optional decimal point
+  str = str.replace(/\.0+$/, '').replace(/(\.[0-9]*?[1-9])0+$/, '$1').replace(/\.$/, '');
+  const [intPart, decPart] = str.split('.');
+  const withThousands = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  return decPart ? `${withThousands},${decPart}` : withThousands;
+}
+
+function WaardeInput({ value, onChange, onAddFormule, isFormula = false, computedValue = null, unit = '', error = null, onFocus, onBlur }) {
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: colors.lightGray300,
+        borderRadius: 8,
+        backgroundColor: 'white',
+      }}
+    >
+      <View style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 12 }}>
+        <TextInput
+          style={[
+            { fontSize: 16, color: isFormula ? colors.lightGray600 : colors.lightGray900, padding: 0 },
+            Platform.OS === 'web' && { outline: 'none' }
+          ]}
+          placeholder="Waarde of formule"
+          value={value}
+          onChangeText={onChange}
+          onFocus={onFocus}
+          onBlur={onBlur}
+          blurOnSubmit={false}
+          // Improve usability: allow submitting with enter on web
+          onSubmitEditing={() => {
+            // If user presses enter in a formula context, open picker for refinement
+            if (isFormula && typeof onAddFormule === 'function') {
+              console.log('[WaardeInput] onSubmitEditing -> opening formule modal');
+              onAddFormule();
+            }
+          }}
+        />
+        {isFormula && (
+          <View style={{ marginTop: 4 }}>
+            {error ? (
+              <Text style={{ color: colors.red500, fontSize: 12, fontStyle: 'italic' }}>{error}</Text>
+            ) : (
+              typeof computedValue === 'number' && (
+                <Text style={{ color: colors.lightGray700, fontSize: 12 }}>
+                  = {formatNumber(computedValue)}
+                  {unit ? ` ${unit}` : ''}
+                </Text>
+              )
+            )}
+          </View>
+        )}
+      </View>
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityLabel="Formule kiezen"
+        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        onPress={() => {
+          if (typeof onAddFormule === 'function') {
+            onAddFormule();
+          }
+        }}
+        style={{ padding: 8, borderLeftWidth: 1, borderLeftColor: colors.lightGray200 }}
+      >
+        <Calculator color={colors.blue600} size={20} />
+      </TouchableOpacity>
+    </View>
+  );
+}
 
 const buildPropertiesMap = (properties, outputUnit) => {
     const map = {};
@@ -1182,10 +1264,19 @@ const AddPropertyScreen = ({ ...props }) => {
                                 // 4. Merge recomputed values back into full property objects preserving original relation data (formules, files)
                                 if (Array.isArray(item.properties)) {
                                     const fullMerged = item.properties.map(orig => {
-                                        const match = recomputedDraft.find(r => r.id === orig.id);
+                                        // Match by ID if possible, otherwise by name (for temp props)
+                                        const match = recomputedDraft.find(r => {
+                                            if (r.id && orig.id && r.id === orig.id) return true;
+                                            if ((!r.id || String(r.id).startsWith('temp_')) && (!orig.id || String(orig.id).startsWith('temp_'))) {
+                                                return r.name === orig.name;
+                                            }
+                                            return false;
+                                        });
+                                        
                                         if (!match) return orig;
                                         return {
                                             ...orig,
+                                            ...match, // Apply all updates from the draft
                                             waarde: match.waarde,
                                             eenheid: match.eenheid,
                                             Formule_id: match.Formule_id,
@@ -1198,7 +1289,10 @@ const AddPropertyScreen = ({ ...props }) => {
 
                                 // 4b. Optimistic overlay in Properties screen: cache the edited property
                                 try {
+                                    // Find the edited property in the recomputed draft
+                                    // We use the index 'idx' but we should be careful if the draft order changed (it shouldn't have)
                                     const editedProp = recomputedDraft[idx];
+                                    
                                     if (editedProp && editedProp.name) {
                                         // Build a minimal optimistic payload mirroring PropertiesScreen expectations
                                         const optimistic = [{
@@ -1210,8 +1304,36 @@ const AddPropertyScreen = ({ ...props }) => {
                                             Formule_id: editedProp.Formule_id || null,
                                         }];
                                         addOptimisticProperties(objectIdForProperties, optimistic);
+                                        
+                                        // Also update the global cache immediately so other screens see it
+                                        const g = globalThis;
+                                        if (g.__currentObjectItems && g.__currentObjectItems[item.id]) {
+                                            const cachedItem = g.__currentObjectItems[item.id];
+                                            if (Array.isArray(cachedItem.properties)) {
+                                                // Update the property in the global cache
+                                                cachedItem.properties = cachedItem.properties.map(p => {
+                                                    if (p.id === editedProp.id || (p.name === editedProp.name && String(p.id).startsWith('temp_'))) {
+                                                        return { ...p, ...editedProp };
+                                                    }
+                                                    return p;
+                                                });
+                                                console.log('[AddPropertyScreen] Updated global cache for property:', editedProp.name);
+                                            }
+                                        }
+
+                                        // Trigger global listeners to notify other screens (like PropertiesScreen)
+                                        if (Array.isArray(g.__propertyChangeListeners)) {
+                                            g.__propertyChangeListeners.forEach(l => {
+                                                try { l(); } catch (e) { console.warn(e); }
+                                            });
+                                        }
+
+                                        // Also update local state in index.js if callback provided
+                                        if (typeof props.onLocalUpdate === 'function') {
+                                            props.onLocalUpdate(item.id, editedProp);
+                                        }
                                     }
-                                } catch (_) { /* ignore optimistic cache errors */ }
+                                } catch (e) { console.warn('[AddPropertyScreen] Optimistic update error:', e); }
 
                                 // 5. Close the modal
                                 setShowEditModal(false);

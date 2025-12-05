@@ -1,7 +1,7 @@
 import { Plus, X } from 'lucide-react-native';
 import { useState } from 'react';
 import { Alert, Dimensions, KeyboardAvoidingView, Modal, Platform, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { createTemplate } from '../../../../lib/api';
+import { createTemplate } from '../../api';
 import AppStyles, { colors } from '../../AppStyles';
 
 const AddTemplateModal = ({ visible, onClose, onTemplateSaved }) => {
