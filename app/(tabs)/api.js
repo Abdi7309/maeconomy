@@ -6,7 +6,6 @@ import {
 import {
   addDoc,
   collection,
-  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -16,7 +15,7 @@ import {
   setDoc,
   updateDoc,
   where,
-  writeBatch,
+  writeBatch
 } from 'firebase/firestore';
 import { Alert } from 'react-native';
 import { uploadToImageKit } from '../../utils/imageKitUpload';
