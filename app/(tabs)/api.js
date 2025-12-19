@@ -124,14 +124,32 @@ const fetchPropertiesForObject = async (objectId) => {
     const propsRef = collection(db, 'objects', objectId, 'eigenschappen');
     const snap = await getDocs(propsRef);
 
-    return snap.docs.map((d) => {
+    const properties = await Promise.all(snap.docs.map(async (d) => {
       const data = d.data() || {};
+      
+      // Fetch files from subcollection
+      let files = [];
+      try {
+        const filesRef = collection(db, 'objects', objectId, 'eigenschappen', d.id, 'files');
+        const filesSnap = await getDocs(filesRef);
+        files = filesSnap.docs.map(fd => ({ id: fd.id, ...fd.data() }));
+      } catch (e) {
+        console.warn('[fetchPropertiesForObject] Error fetching files for property:', d.id, e);
+      }
+
+      // Fallback to legacy array if subcollection is empty (for backward compatibility)
+      if (files.length === 0 && (data.files || data.property_files)) {
+         files = data.files || data.property_files || [];
+      }
+
       return {
         id: d.id,
         ...data,
-        files: data.files || data.property_files || [],
+        files: files,
       };
-    });
+    }));
+
+    return properties;
   } catch (error) {
     console.error('[fetchPropertiesForObject] Error:', error);
     return [];
@@ -423,7 +441,7 @@ export const addProperties = async (objectId, properties) => {
       generatedIds.push(propId);
 
       // ---- FILE UPLOAD ----
-      const files = [];
+      const uploadedFiles = [];
       if (prop.files && Array.isArray(prop.files)) {
         for (const file of prop.files) {
           try {
@@ -433,7 +451,7 @@ export const addProperties = async (objectId, properties) => {
             const fileType = file.mimeType || file.type;
             const uploadResult = await uploadToImageKit(file.uri, fileName, fileType);
 
-            files.push({
+            uploadedFiles.push({
               name: fileName,
               url: uploadResult.url,
               size: uploadResult.size,
@@ -459,10 +477,18 @@ export const addProperties = async (objectId, properties) => {
         formule: prop.formule ?? prop.Formule_expression ?? '',
         Formule_id: prop.Formule_id ?? null,
         index: prop.index !== undefined ? prop.index : 9999,
-        files,
         created_at: serverTimestamp(),
         updated_at: serverTimestamp(),
       });
+
+      // ---- FILES SUBCOLLECTION ----
+      for (const fileData of uploadedFiles) {
+          const fileDocRef = doc(collection(db, `objects/${objectId}/eigenschappen/${propId}/files`));
+          batch.set(fileDocRef, {
+              ...fileData,
+              created_at: serverTimestamp()
+          });
+      }
     }
 
     // Alleen updated_at op het object zelf
@@ -537,13 +563,25 @@ export const findPropertyIdByName = async (objectId, propertyName) => {
 export const deleteProperty = async (objectId, propertyId) => {
   try {
     console.log('[deleteProperty] Deleting property:', objectId, propertyId);
+    
+    // Delete files subcollection
+    const filesRef = collection(db, `objects/${objectId}/eigenschappen/${propertyId}/files`);
+    const filesSnap = await getDocs(filesRef);
+    
+    const batch = writeBatch(db);
+    filesSnap.docs.forEach((d) => {
+        batch.delete(d.ref);
+    });
+    
     const propRef = doc(
       db,
       `objects/${objectId}/eigenschappen/${propertyId}`
     );
-    // Use deleteDoc to actually remove from database
-    await deleteDoc(propRef);
-    console.log('[deleteProperty] Property successfully deleted from database');
+    batch.delete(propRef);
+    
+    await batch.commit();
+
+    console.log('[deleteProperty] Property and its files successfully deleted from database');
     return true;
   } catch (error) {
     console.error('[deleteProperty] Error:', error);
