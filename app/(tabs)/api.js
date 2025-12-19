@@ -18,11 +18,11 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore';
-import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { Alert } from 'react-native';
+import { uploadToImageKit } from '../../utils/imageKitUpload';
 
 // LET OP: pad zoals jij gebruikt
-import { auth, db, storage } from './config/firebase';
+import { auth, db } from './config/firebase';
 
 // Kleine helper om van een naam een Firestore-vriendelijke ID te maken
 const slugify = (str) =>
@@ -428,23 +428,17 @@ export const addProperties = async (objectId, properties) => {
         for (const file of prop.files) {
           try {
             const fileName = file.name || `file_${Date.now()}`;
-            const fileRef = ref(
-              storage,
-              `properties/${objectId}/${propId}/${fileName}`
-            );
-
-            const response = await fetch(file.uri);
-            const blob = await response.blob();
-
-            await uploadBytes(fileRef, blob, { contentType: blob.type });
-            const downloadUrl = await getDownloadURL(fileRef);
+            
+            // Use ImageKit instead of Firebase Storage
+            const fileType = file.mimeType || file.type;
+            const uploadResult = await uploadToImageKit(file.uri, fileName, fileType);
 
             files.push({
               name: fileName,
-              url: downloadUrl,
-              size: blob.size,
-              type: blob.type,
-              path: `properties/${objectId}/${propId}/${fileName}`,
+              url: uploadResult.url,
+              size: uploadResult.size,
+              type: fileType,
+              fileId: uploadResult.fileId,
             });
           } catch (err) {
             console.warn('[addProperties] File upload error:', err);

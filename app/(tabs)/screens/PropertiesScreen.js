@@ -1,7 +1,7 @@
 import { getDownloadURL, ref } from 'firebase/storage';
 import { ChevronLeft, File, FileImage, FileText, Paperclip, Plus, Tag, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { Image, Linking, Modal, RefreshControl, ScrollView, StatusBar, Text, TouchableOpacity, View } from 'react-native';
+import { Image, Linking, Modal, Platform, RefreshControl, ScrollView, StatusBar, Text, TouchableOpacity, View } from 'react-native';
 import AppStyles, { colors } from '../AppStyles';
 import { storage } from '../config/firebase';
 
@@ -146,22 +146,50 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
     // --- NEW: Function to handle opening a file ---
     const handleOpenFile = async (file) => {
         try {
-            // Get download URL from Firebase Storage
-            const fileRef = ref(storage, file.url || file.file_path);
-            const fileUrl = await getDownloadURL(fileRef);
+            let fileUrl = file.url;
+            
+            // Check if it's a Firebase Storage path (legacy) or a full URL
+            // ImageKit URLs start with http/https
+            if (fileUrl && !fileUrl.startsWith('http') && !fileUrl.startsWith('gs://')) {
+                 // Assume it's a path, try to get download URL from Firebase
+                 try {
+                    const fileRef = ref(storage, fileUrl);
+                    fileUrl = await getDownloadURL(fileRef);
+                 } catch (e) {
+                    console.warn('Could not get download URL for path:', fileUrl, e);
+                 }
+            } else if (!fileUrl && file.file_path) {
+                 // Fallback to file_path if url is missing
+                 try {
+                    const fileRef = ref(storage, file.file_path);
+                    fileUrl = await getDownloadURL(fileRef);
+                 } catch (e) {
+                    console.warn('Could not get download URL for file_path:', file.file_path, e);
+                 }
+            } else if (!fileUrl && file.uri) {
+                // Fallback to local URI (optimistic update)
+                fileUrl = file.uri;
+            }
+            
+            // Use file.type or file.file_type or file.mimeType
+            const fType = file.file_type || file.type || file.mimeType;
 
-            if (file.file_type && file.file_type.startsWith('image/')) {
+            if (fType && fType.startsWith('image/')) {
                 // If it's an image, open it in the modal
                 setSelectedImageUrl(fileUrl);
                 setModalVisible(true);
             } else {
                 // For other files, open in a new tab/browser
-                Linking.openURL(fileUrl);
+                if (Platform.OS === 'web') {
+                    window.open(fileUrl, '_blank');
+                } else {
+                    Linking.openURL(fileUrl);
+                }
             }
         } catch (error) {
             console.error('[PropertiesScreen] Error opening file:', error);
             // Fallback: try direct URL if available
-            if (file.url) {
+            if (file.url && file.url.startsWith('http')) {
                 Linking.openURL(file.url);
             }
         }
@@ -564,13 +592,13 @@ const PropertiesScreen = ({ currentPath, objectsHierarchy, setCurrentScreen, onR
                                                 }}
                                                 onPress={() => handleOpenFile(file)} // --- Use new handler ---
                                             >
-                                                {getFileIcon(file.file_type)}
+                                                {getFileIcon(file.type || file.file_type || file.mimeType)}
                                                 <View style={{ marginLeft: 12, flex: 1 }}>
                                                     <Text style={{ color: colors.lightGray800, fontWeight: '600', fontSize: 14 }} numberOfLines={1}>
-                                                        {file.file_name}
+                                                        {file.name || file.file_name || 'Naamloos bestand'}
                                                     </Text>
                                                     <Text style={{ color: colors.lightGray500, fontSize: 12 }}>
-                                                        {file.file_type || 'Bestand'}
+                                                        {file.type || file.file_type || file.mimeType || 'Bestand'}
                                                     </Text>
                                                 </View>
                                                 <Paperclip color={colors.blue600} size={18} />

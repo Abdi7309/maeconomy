@@ -284,6 +284,14 @@ const addOptimisticProperties = (objectId, props) => {
         mergedMap.set(key, { ...p, __optimistic: true, __createdAt: now });
     });
     cache.map.set(objectId, { props: Array.from(mergedMap.values()), expires: now + cache.expiryMs });
+    
+    // Trigger global listeners to notify other screens (like PropertiesScreen)
+    try {
+        const g = globalThis;
+        if (g.__propertyChangeListeners && Array.isArray(g.__propertyChangeListeners)) {
+            g.__propertyChangeListeners.forEach(l => l());
+        }
+    } catch (_) {}
 };
 
 const getOptimisticProperties = (objectId) => {
